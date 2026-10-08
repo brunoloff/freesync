@@ -2,7 +2,7 @@
 
 FreeSync will synchronize selected local folders with Google Drive on Linux, Windows, and macOS. The implementation will use a Rust sync engine, SQLite for persistent state, and a Tauri 2 desktop interface. The engine will run independently of the settings window and expose the same operations through a command line interface for testing and recovery.
 
-This roadmap defines a complete first version and stable stopping points for implementation goals. Phases are cumulative: completing Phase 7 means completing Phases 1 through 7 and their acceptance checks. All phases below are currently pending.
+This roadmap defines a complete first version and stable stopping points for implementation goals. Phases are cumulative: completing Phase 7 means completing Phases 1 through 7 and their acceptance checks. Implementation phases remain pending. The OAuth prerequisites for Phase 3 have been completed separately; see [OAuth setup](OAUTH_SETUP.md). This does not complete the read-only Drive adapter or its other acceptance checks.
 
 ## Scope and existing files
 
@@ -10,7 +10,7 @@ The first version includes automatic two-way sync, multiple Google accounts and 
 
 OneDrive and other providers come after this roadmap. The architecture will allow them, but implementing another provider is not required for version 1. Online-only placeholders, filesystem mounts, file-manager overlays, shared-drive administration, and editing Google-native documents through local office files are also later extensions.
 
-Bruno already has an InSync-managed tree at `/home/bruno/Crapbox`. He intends to turn off InSync before live FreeSync testing. FreeSync must verify that it is not competing with another sync process before starting a live test or adoption. The corresponding Google account, remote folder IDs, and existing InSync exclusions still need to be established; do not assume that the local directory corresponds to a remote folder named Crapbox or to the account root.
+Bruno already has an InSync-managed tree at `/home/bruno/Crapbox`. He intends to turn off InSync before live FreeSync testing. FreeSync must verify that it is not competing with another sync process before starting a live test or adoption. The corresponding Google account has been confirmed through Drive OAuth and is recorded in private local configuration. Remote folder IDs and existing InSync exclusions still need to be established; do not assume that the local directory corresponds to a remote folder named Crapbox or to the account root.
 
 Existing files under `/home/bruno/Crapbox` may be used for read-only inventory and comparison. Development may create, edit, rename, and remove test files under `/home/bruno/Crapbox/test-freesync` and its explicitly paired remote test folder. Prefer a separate directory for each test run and clean up only that run's fixtures. Live integration tests must check both the local files and persisted Drive state.
 
