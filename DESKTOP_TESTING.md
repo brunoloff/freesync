@@ -17,7 +17,7 @@ Drive test pair. They do not activate an existing production tree.
 | Window close | Hide settings triggered native `CloseRequested`, which hid the actual window. Native visibility became false while the tray object remained present. A new file transferred successfully while hidden. Show settings restored native visibility. |
 | Quit/restart | Choosing Quit stopped the native process with status 0. The supervisor restarted it; the saved pair and preferences survived. The final interface quits directly without an extra confirmation dialog. |
 | Single ownership | Starting the CLI engine while the desktop owned the same profile returned `lock_busy`. |
-| Keyboard | Tab and Shift+Tab wrap inside the folder dialog; Escape dismisses it and restores focus to Folder settings. A failed first check exposed a focus escape and was fixed before the passing check. |
+| Keyboard | Tab and Shift+Tab wrap inside the folder dialog; Escape dismisses it and restores focus to Folder settings. Nested reconnect uses a distinct accessible dialog name; cancelling it restores focus to Reconnect in the folder dialog. A failed first check exposed a focus escape and was fixed before the passing check. |
 | Diagnostics | Browser warning/error logs were empty in the final session. Routine engine events contain timestamps, counts and typed error codes, without credentials, private paths or file contents. |
 
 Startup and notification controls are implemented and initially off. They remained
