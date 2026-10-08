@@ -4,7 +4,7 @@ The preview includes ordinary hidden files. Exclusion globs match relative paths
 
 Local roots must be real directories and must not overlap another pair or application state. A scan error, unavailable root, changed root identity or incomplete Drive listing blocks reconciliation. Drive duplicate names remain explicit ambiguities. File equality uses content checksums and sizes; timestamps alone do not establish a baseline.
 
-Filesystem events request a rescan. Native watching uses a short bounded debounce; periodic reconciliation also runs when no event arrives. Native watcher failures fall back to scans. A missing root is not an empty inventory. Parent monitoring and periodic scans detect its return, after which root identity must still match the established pair.
+Filesystem changes request a rescan. Read/access notifications and changes to sibling folders are ignored, so inventory reads cannot feed back into repeated scans. Native watching uses a short bounded debounce; periodic reconciliation also runs when no event arrives. Native watcher errors and rescan warnings invalidate the inventory, while scan recovery covers missed events. A missing root is not an empty inventory. Parent monitoring and periodic scans detect its return, after which root identity must still match the established pair.
 
 Normal synchronization uses Drive trash and retains local deleted/replaced contents in profile recovery storage. It never permanently deletes Drive files. The retention policy for the initial preview is to keep local recovery copies until the user removes them; no automatic cleanup is enabled.
 

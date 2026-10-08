@@ -2,7 +2,7 @@ use crate::{
     Result,
     local::{Exclusions, canonical_root},
 };
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -37,10 +37,17 @@ impl LocalWatcher {
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 let relevant = match event {
                     Err(_) => true,
+                    Ok(event) if event.need_rescan() => true,
+                    // Inventory hashing opens files. Access notifications would
+                    // feed those reads back into an endless reconciliation loop.
+                    // Content/metadata changes still invalidate the inventory.
+                    Ok(event) if matches!(event.kind, EventKind::Access(_)) => false,
                     Ok(event) => event.paths.iter().any(|p| {
                         p.strip_prefix(&event_root)
                             .map(|r| !ignore.excludes(&r.to_string_lossy().replace('\\', "/")))
-                            .unwrap_or(true)
+                            // Parent watching detects this root's return; a
+                            // changed sibling does not invalidate its contents.
+                            .unwrap_or(false)
                     }),
                 };
                 if relevant {

@@ -66,11 +66,15 @@ renderer. Private concept and screenshot files are excluded from publication.
 The automatic live sequence passed creation, edits, stable-identity moves,
 recoverable deletion, simultaneous edits, pause/resume, actual network failure,
 offline changes, restart and stable empty queues. The first monitored soak was
-interrupted when its terminal session ended and is not counted as completed.
+interrupted when its terminal session ended and is not counted as completed. A
+later supervised run verified seven content checkpoints and three clean restarts,
+but was stopped after a regression exposed scan feedback from read/access events
+and unrelated sibling changes. The watcher correction preserves real native
+modifications and rescan warnings; the corrected runtime needs fresh live evidence.
 
-`scripts/live_soak.py` supervises a fresh three-hour run independently of terminal
-session lifetime. It alternates local and remote changes, downloads actual Drive
-content for every checkpoint, verifies retained conflicts and empty queues, and
+`scripts/live_soak.py` supervises a fresh three-hour run after the automatic
+sequence passes, independently of terminal session lifetime. It alternates local
+and remote changes, downloads actual Drive content for every checkpoint, verifies retained conflicts and empty queues, and
 performs two scheduled native-process restarts plus the UI Quit restart. Private
 evidence records heartbeat, owner process, checkpoint results, clean restarts and
 the final graceful Quit. A cumulative Phase 7 milestone remains pending until

@@ -143,3 +143,40 @@ async fn native_watcher_notices_new_nested_directories_and_atomic_editor_saves()
             .contains_key("new/deep/file")
     );
 }
+
+#[tokio::test]
+async fn inventory_reads_and_sibling_changes_do_not_trigger_reconciliation_but_edits_do() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("file"), b"initial").unwrap();
+    let mut watcher = LocalWatcher::new(&root, &[], Duration::from_secs(30), false).unwrap();
+    assert_eq!(watcher.backend(), "native_with_rescan");
+    let cancel = CancellationToken::new();
+    local::scan(&root, &[]).unwrap();
+    fs::write(
+        temp.path().join("unrelated-sibling"),
+        b"outside the selected root",
+    )
+    .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(800), watcher.wait(&cancel))
+            .await
+            .is_err(),
+        "Reading the inventory or changing a sibling must not request reconciliation"
+    );
+    fs::write(root.join("file"), b"edited").unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), watcher.wait(&cancel))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        local::scan(&root, &[]).unwrap().entries["file"]
+            .fingerprint
+            .as_ref()
+            .unwrap()
+            .size,
+        6
+    );
+}
