@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+target/
+node_modules/
+dist/
+.env
+.env.*
+client_secret*.json
+google-client.json
+token*.json
+oauth-bootstrap.json

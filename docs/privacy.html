@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeSync privacy policy</title>
+<link rel="stylesheet" href="style.css">
+<main>
+  <p><a href="index.html">FreeSync</a></p>
+  <h1>Privacy policy</h1>
+  <p class="eyebrow">Last updated: 8 October 2026</p>
+  <p>FreeSync is a personal desktop application under development. This policy covers FreeSync and its local Google OAuth authorization helper.</p>
+  <h2>Google account access</h2>
+  <p>With your consent, FreeSync requests the Google Drive scope <code>https://www.googleapis.com/auth/drive</code>. This permission allows access to file contents, names, metadata and folders, and permits creating, changing and deleting Drive files. It is needed to synchronize existing files. The Google permission applies to your whole Drive account, even when the application operates on selected folders.</p>
+  <p>The authorization helper reads your Drive account identity to confirm the selected account and checks access to the Drive change feed. As synchronization features are implemented and enabled, the application will read and transfer files and metadata between Google Drive and your selected local folders.</p>
+  <h2>How data is used and stored</h2>
+  <p>Google account data is used to authorize the connection and provide file synchronization. FreeSync does not sell Google user data, use it for advertising, or use it to train artificial intelligence models.</p>
+  <p>FreeSync runs on your computer. File contents and synchronization state are stored locally and in your Google Drive. The application communicates with Google APIs to perform the operations you enable; it does not send your files or credentials to a central FreeSync server.</p>
+  <p>OAuth refresh tokens are stored in the operating system credential store. The current Linux helper requires Secret Service and does not fall back to a plaintext token file. Local configuration includes the selected account and public client information. Client setup credentials are kept outside the synchronized folder with restricted file permissions. Tokens and authorization codes are excluded from helper output.</p>
+  <h2>Control and retention</h2>
+  <p>You can stop using FreeSync and revoke its access through your <a href="https://myaccount.google.com/connections">Google account connections</a>. Removing authorization does not remove files already stored on your computer or in Drive. You can remove local credentials and configuration through your credential manager and local file tools. A built-in disconnect flow is planned for the desktop application.</p>
+  <h2>Limited use</h2>
+  <p>FreeSync's use and transfer of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+  <h2>This website and contact</h2>
+  <p>This informational website does not request Google account access and has no application analytics. Its hosting provider may process ordinary request information under its own privacy policy. For questions, contact the maintainer through <a href="https://github.com/brunoloff">GitHub</a>.</p>
+  <p>This policy will be updated when the application's data practices change.</p>
+  <nav aria-label="Project policies"><a href="index.html">Home</a><a href="terms.html">Terms of use</a></nav>
+</main>
+</html>
