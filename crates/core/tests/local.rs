@@ -117,7 +117,10 @@ async fn polling_recovers_missed_events_root_reappearance_and_cancels() {
 #[tokio::test]
 async fn native_watcher_notices_new_nested_directories_and_atomic_editor_saves() {
     let temp = tempfile::tempdir().unwrap();
-    let mut watcher = LocalWatcher::new(temp.path(), &[], Duration::from_secs(2), false).unwrap();
+    // A native event must arrive well before the scan fallback; otherwise this
+    // test would also pass with no working recursive notification backend.
+    let mut watcher = LocalWatcher::new(temp.path(), &[], Duration::from_secs(30), false).unwrap();
+    assert_eq!(watcher.backend(), "native_with_rescan");
     fs::create_dir_all(temp.path().join("new/deep")).unwrap();
     fs::write(temp.path().join("new/deep/editor.tmp"), b"saved").unwrap();
     fs::rename(

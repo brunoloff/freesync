@@ -16,6 +16,8 @@ Implemented recursive stable inventory, content fingerprints, exclusions, symlin
 
 Evidence: six local integration tests passed for create/edit/atomic editor save/rename/move/delete/nested folders, hidden files, restart-equivalent scans, exclusions, unreadable root, missing/replaced root, a missed event recovered by polling, root return, native watcher convergence and cancellation. CLI watcher was stopped by SIGINT with exit status 0. Initial policies are documented in `POLICIES.md`.
 
+The native watcher check requires an active native backend and a notification within three seconds while polling is set to thirty seconds. It passed after nested-folder creation and an atomic editor save, proving that polling alone cannot satisfy this check.
+
 ## Phase 3 — complete
 
 Rust OAuth and the read-only Drive adapter now compile. OAuth includes PKCE, state validation, loopback callback, explicit offline consent, refresh, account matching, revocation and native credential stores without plaintext fallback. Linux reads the same Secret Service entry as the completed Python bootstrap. Google adapter supports account identity, metadata/capabilities, all listing/change pages, checksums and bounded range downloads. Initial remote snapshot captures a cursor before traversal and repeats after scoped changes; duplicate names remain visible.
