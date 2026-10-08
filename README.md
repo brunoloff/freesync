@@ -4,7 +4,7 @@ A desktop application being developed to synchronize local folders with Google D
 
 The application uses a Rust synchronization engine and a Tauri desktop interface. See [the implementation roadmap](PLAN.md) for the twelve cumulative phases and their acceptance criteria.
 
-Current implementation: a Rust workspace with local inventory/watchers, native OAuth, a paginated Drive adapter, persistent dry-run planning, staged transfers and a continuous CLI engine. Linux sign-in, refresh and eight guarded live transfer checks are verified. The React/TypeScript Tauri interface is implemented; automatic engine and desktop acceptance checks are in progress. See [implementation progress](PROGRESS.md), [policies](POLICIES.md) and [OAuth setup](OAUTH_SETUP.md).
+Current implementation: a Rust workspace with local inventory/watchers, native OAuth, a paginated Drive adapter, persistent dry-run planning, staged transfers, a continuous engine and React/TypeScript Tauri interface. Linux sign-in, refresh, eight guarded live transfer checks and the automatic live sequence are verified. The UI has passed real sign-in, configuration, preview/activation, transfers, conflict preservation, pause/resume, native window lifecycle and clean Quit/restart. The cumulative desktop milestone awaits its monitored three-hour soak. See [implementation progress](PROGRESS.md), [desktop testing](DESKTOP_TESTING.md), [policies](POLICIES.md) and [OAuth setup](OAUTH_SETUP.md).
 
 ## Project website
 
@@ -60,7 +60,7 @@ cargo build -p freesync-desktop
 
 The binary embeds the built frontend and needs no development web server. Rebuild the frontend and binary after UI changes. Close the settings window to keep the engine running in the tray. Use Quit to save progress and stop. The CLI and desktop share an exclusive profile owner; stop one before starting the other. Startup at login is optional and disabled until selected.
 
-The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. Phase 7 accepts only the private authorized test pair. Existing existing sync tree adoption remains Phase 8. Keep both preserves the current local file under a conflict name and syncs the Drive version under its original name.
+The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. Phase 7 accepts only the private authorized test pair. Existing-tree adoption remains Phase 8. Keep both preserves the current local file under a conflict name and syncs the Drive version under its original name.
 
 For browser UI QA against the **actual native app**, explicitly build the debug-only `browser-test` feature and set `FREESYNC_BROWSER_TEST=1`. Its private profile `browser-test.json` contains a short-lived launch URL. The listener binds a random loopback port, requires a session cookie and same-origin requests, and uses the same narrow Rust dispatcher as native IPC. Normal builds have no listener. Do not publish this launch URL or the private profile.
 

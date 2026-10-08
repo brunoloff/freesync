@@ -20,8 +20,17 @@ function Modal({ title, description, children, footer, onClose }: { title: strin
     const previous = document.activeElement as HTMLElement | null;
     element.showModal();
     const cancel = (event: Event) => { event.preventDefault(); close.current(); };
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const controls = [...element.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')].filter(control => control.getClientRects().length > 0);
+      const first = controls[0]; const last = controls[controls.length - 1];
+      if (!first) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
     element.addEventListener('cancel', cancel);
-    return () => { element.removeEventListener('cancel', cancel); element.close(); previous?.focus(); };
+    element.addEventListener('keydown', trap);
+    return () => { element.removeEventListener('cancel', cancel); element.removeEventListener('keydown', trap); element.close(); previous?.focus(); };
   }, []);
   return <dialog ref={dialog} className="dialog" aria-labelledby="dialog-title"><header className="dialog-heading"><div><h2 id="dialog-title">{title}</h2>{description && <p>{description}</p>}</div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X /></button></header><div className="dialog-body">{children}</div>{footer && <footer className="dialog-footer">{footer}</footer>}</dialog>;
 }
@@ -35,7 +44,6 @@ export default function App() {
   const [pairDialog, setPairDialog] = useState(false);
   const [login, setLogin] = useState(false);
   const [preview, setPreview] = useState<{ pairId: string; result: Preview; wasPaused: boolean }>();
-  const [quit, setQuit] = useState(false);
   const [stopping, setStopping] = useState(false);
   const refresh = useCallback(async () => { const value = await rpc<Snapshot>('snapshot'); setSnapshot(value); }, []);
   useEffect(() => {
@@ -56,6 +64,10 @@ export default function App() {
     finally { setBusy(false); }
   };
   const control = (name: string) => { void action('control', { action: name }).catch(() => {}); };
+  const quit = () => {
+    setStopping(true); setError('');
+    void rpc('quit').catch(e => { setStopping(false); setError(message(e)); });
+  };
   const pair = snapshot?.pairs.find(p => p.id === selected) ?? snapshot?.pairs[0];
   const paused = snapshot?.controls.paused ?? false;
   const prepare = async (pairId: string) => {
@@ -75,13 +87,14 @@ export default function App() {
   };
   const good = !!pair?.enabled && !paused && !pair.status.error && !pair.status.conflicts && !pair.deletion_hold;
   const footer = stopping ? 'Saving progress and stopping…' : paused ? 'Sync is paused' : snapshot?.pairs.some(p => p.enabled) ? 'Sync is running' : 'Choose a folder to start syncing';
-  return <div className="app-shell">
+  return <div className="app-shell" data-window-visible={snapshot?.window_visible} data-tray-available={snapshot?.tray_available}>
     <aside className="sidebar"><div className="wordmark">FreeSync</div><nav aria-label="Main navigation">{(['Folders', 'Conflicts', 'Preferences'] as Page[]).map(name => {
       const Icon = name === 'Folders' ? Folder : name === 'Conflicts' ? ArrowLeftRight : Settings;
       return <button key={name} className={page === name ? 'nav-link selected' : 'nav-link'} aria-current={page === name ? 'page' : undefined} onClick={() => setPage(name)}><Icon />{name}{name === 'Conflicts' && !!snapshot?.conflicts.length && <span className="count">{snapshot.conflicts.length}</span>}</button>;
-    })}</nav><div className="sidebar-bottom"><div className="account-status"><span className="status-dot" /><div><strong>Personal Google account</strong><span>{snapshot?.account_verified ? 'Connected' : snapshot?.account ? 'Checking connection' : 'Not connected'}</span></div></div><div className="sidebar-actions"><button onClick={() => { void action('hide').then(() => setNotice('Settings are hidden. Sync continues in the tray.')).catch(() => {}); }}><Eye />Hide settings</button><button onClick={() => setQuit(true)}><Power />Quit</button></div></div></aside>
+    })}</nav><div className="sidebar-bottom"><div className="account-status"><span className="status-dot" /><div><strong>Personal Google account</strong><span>{snapshot?.account_verified ? 'Connected' : snapshot?.account ? 'Checking connection' : 'Not connected'}</span></div></div><div className="sidebar-actions"><button onClick={() => { void action('hide').catch(() => {}); }}><Eye />Hide settings</button><button disabled={busy || stopping} onClick={quit}><Power />Quit</button></div></div></aside>
     <div className="main-shell"><main><header className="page-heading"><div><h1>{page}</h1><p>{page === 'Folders' ? 'Choose what stays in sync.' : page === 'Conflicts' ? 'Preserve both versions when changes overlap.' : 'Make FreeSync work the way you want.'}</p></div><div className="heading-actions"><button disabled={busy || stopping} onClick={() => control(paused ? 'resume' : 'pause')}>{paused ? <Play /> : <Pause />}{paused ? 'Resume' : 'Pause'}</button><button disabled={busy || stopping} onClick={() => control('sync_now')}><RefreshCw />Sync now</button></div></header>
       {error && <div role="alert" className="banner error"><TriangleAlert /><span>{error}</span><button aria-label="Dismiss error" className="icon-button" onClick={() => setError('')}><X /></button></div>}
+      {snapshot && !snapshot.window_visible && <div role="status" className="banner"><Eye /><span>Settings are hidden. Sync continues in the tray.</span><button onClick={() => { void action('show').catch(() => {}); }}>Show settings</button></div>}
       {notice && <div role="status" className="banner"><Check /><span>{notice}</span><button aria-label="Dismiss message" className="icon-button" onClick={() => setNotice('')}><X /></button></div>}
       {!snapshot ? <div className="loading"><LoaderCircle className="spin" />Connecting to the background engine…</div> : page === 'Folders' ? <>
         <div className="section-heading"><h2>Your folders</h2><button className="primary" disabled={busy} onClick={() => setPairDialog(true)}><Plus />Add folder</button></div>
@@ -96,7 +109,6 @@ export default function App() {
     {pairDialog && <PairDialog pair={pair} snapshot={snapshot} onClose={() => setPairDialog(false)} onReconnect={() => setLogin(true)} onSubmit={async (values) => { await action('configure', values); setPairDialog(false); await prepare('test-freesync'); }} />}
     {preview && <Modal title="Preview changes" description="Sync is paused while you review this plan." onClose={closePreview} footer={<><button disabled={busy} onClick={closePreview}>Cancel</button>{pair?.deletion_hold && <button disabled={busy} onClick={() => { void action('approve_deletions', { pairId: preview.pairId, count: pair.deletion_count }).catch(() => {}); }}>Approve {pair.deletion_count} deletions</button>}<button className="primary" disabled={busy || pair?.deletion_hold} onClick={() => { void action('activate', { pairId: preview.pairId }).then(() => { setPreview(undefined); setNotice('Sync is active for the selected folder pair.'); }).catch(() => {}); }}>{snapshot?.pairs.find(p => p.id === preview.pairId)?.enabled ? 'Resume sync' : 'Activate sync'}<ArrowRight /></button></>}><div className="preview-counts"><span><strong>{preview.result.counts.operations}</strong> changes</span><span><strong>{preview.result.counts.conflicts}</strong> conflicts</span><span><strong>{preview.result.counts.skipped}</strong> skipped</span></div><div className="preview-items">{preview.result.operations.map((o, i) => <div key={i}><strong>{o.path}</strong><span>{o.reason}</span></div>)}{preview.result.conflicts.map(c => <div key={c.path}><strong>{c.path}</strong><span>{c.reason}</span></div>)}{preview.result.skipped.map(s => <div key={s.path}><strong>{s.path}</strong><span>{s.reason}</span></div>)}{!preview.result.counts.operations && !preview.result.counts.conflicts && <p>No pending changes. Matching content is already in sync.</p>}</div><p className="muted">Uploads and downloads stay within the selected test folder. Deletions use Drive Trash or local recovery.</p></Modal>}
     {login && <LoginDialog account={snapshot?.account ?? ''} onClose={() => setLogin(false)} onSuccess={() => { setLogin(false); setNotice('Google account connected.'); void refresh(); }} />}
-    {quit && <Modal title="Quit FreeSync?" description="Sync will stop after saving unfinished work. Your files stay in place." onClose={() => setQuit(false)} footer={<><button onClick={() => setQuit(false)}>Cancel</button><button className="primary" onClick={() => { setQuit(false); setStopping(true); void rpc('quit').catch(() => {}); }}>Quit</button></>}><p>Open FreeSync again to resume syncing.</p></Modal>}
   </div>;
 }
 function PairDialog({ pair, snapshot, onClose, onReconnect, onSubmit }: { pair?: Pair; snapshot?: Snapshot; onClose: () => void; onReconnect: () => void; onSubmit: (values: Record<string, unknown>) => Promise<void> }) {
