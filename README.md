@@ -62,9 +62,12 @@ The binary embeds the built frontend and needs no development web server. Rebuil
 
 The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. Phase 7 accepts only the private authorized test pair. Existing-tree adoption remains Phase 8. Keep both preserves the current local file under a conflict name and syncs the Drive version under its original name.
 
-For browser UI QA against the **actual native app**, explicitly build the debug-only `browser-test` feature and set `FREESYNC_BROWSER_TEST=1`. Its private profile `browser-test.json` contains a short-lived launch URL. The listener binds a random loopback port, requires a session cookie and same-origin requests, and uses the same narrow Rust dispatcher as native IPC. Normal builds have no listener. Do not publish this launch URL or the private profile.
+For browser UI QA against the **actual native app**, explicitly build the debug-only `browser-test` feature and set `FREESYNC_BROWSER_TEST=1`. Its private profile `browser-test.json` contains a short-lived launch URL. The listener binds a random loopback port, requires a session cookie and same-origin requests, and uses the same narrow Rust dispatcher as native IPC. The optional frontend probe below verifies that the actual WebKit view mounted and reached Rust through Tauri IPC; its private `native-view.json` contains only flags, counts and geometry. The report command is unavailable through the browser bridge. Normal frontend builds omit the probe, and normal Rust builds have neither its command nor the listener. Do not publish the launch URL or the private profile.
 
 ```sh
+cd desktop
+VITE_FREESYNC_NATIVE_PROBE=1 npm run build
+cd ..
 cargo build -p freesync-desktop --features browser-test
 FREESYNC_BROWSER_TEST=1 ./target/debug/freesync-desktop
 ```

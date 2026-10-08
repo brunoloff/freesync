@@ -17,6 +17,7 @@ Drive test pair. They do not activate an existing production tree.
 | Window close | Hide settings triggered native `CloseRequested`, which hid the actual window. Native visibility became false while the tray object remained present. A new file transferred successfully while hidden. Show settings restored native visibility. |
 | Quit/restart | Choosing Quit stopped the native process with status 0. The supervisor restarted it; the saved pair and preferences survived. The final interface quits directly without an extra confirmation dialog. |
 | Single ownership | Starting the CLI engine while the desktop owned the same profile returned `lock_busy`. |
+| Native renderer/IPC | An opt-in probe in the actual WebKit frontend confirmed the Folders view mounted, one pair rendered, the account showed Connected and Pause was enabled. The native Tauri command received the report from the main webview; its process-bound evidence recorded a 36px heading and actual viewport geometry. The browser bridge cannot submit this report. |
 | Keyboard | Tab and Shift+Tab wrap inside the folder dialog; Escape dismisses it and restores focus to Folder settings. Nested reconnect uses a distinct accessible dialog name; cancelling it restores focus to Reconnect in the folder dialog. A failed first check exposed a focus escape and was fixed before the passing check. |
 | Diagnostics | Browser warning/error logs were empty in the final session. Routine engine events contain timestamps, counts and typed error codes, without credentials, private paths or file contents. |
 
@@ -27,9 +28,11 @@ required sync workflows.
 
 Native computer automation is unavailable in this environment. The browser tests
 therefore do not claim to verify OS tray mouse clicks, native chooser interaction,
-notification delivery, startup execution, or the WebKit renderer's visual output.
-Native window lifecycle, tray-object creation, process exit, stored state and real
-engine transfers were verified. The graphical local chooser is implemented; the
+notification delivery, startup execution, or a pixel screenshot of WebKit output.
+Actual WebKit DOM rendering and native IPC were verified by a flag/count-only,
+debug-only report submitted through the native command channel. Native window
+lifecycle, tray-object creation, process exit, stored state and real engine
+transfers were also verified. The graphical local chooser is implemented; the
 typed-path selection route was exercised. OS interaction checks belong on the
 platform validation checklist before distribution.
 

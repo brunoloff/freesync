@@ -75,6 +75,10 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
                     .is_enabled()
                     .map_err(|_| platform_error())?
             );
+            #[cfg(feature = "browser-test")]
+            if cfg!(debug_assertions) && std::env::var_os("FREESYNC_BROWSER_TEST").is_some() {
+                value["native_ui"] = json!(browser_test::native_view(&state.profile));
+            }
             Ok(value)
         }
         "control" => state.control(&text("action")?),
@@ -257,6 +261,19 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
 async fn settings(app: tauri::AppHandle, command: String, args: Value) -> Result<Value> {
     dispatch(app, &command, args).await
 }
+#[cfg(feature = "browser-test")]
+#[tauri::command]
+fn native_ui_probe(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    report: browser_test::NativeViewReport,
+) -> Result<()> {
+    if window.label() != "main" {
+        return Err(platform_error());
+    }
+    // This command is deliberately absent from the browser dispatch endpoint.
+    browser_test::record_native_view(&app, report)
+}
 fn icon() -> tauri::image::Image<'static> {
     // A code-native pair of synchronization arcs, matching the UI icon metaphor.
     let mut pixels = vec![0; 32 * 32 * 4];
@@ -293,8 +310,12 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--background"]),
-        ))
-        .invoke_handler(tauri::generate_handler![settings])
+        ));
+    #[cfg(feature = "browser-test")]
+    let builder = builder.invoke_handler(tauri::generate_handler![settings, native_ui_probe]);
+    #[cfg(not(feature = "browser-test"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![settings]);
+    let builder = builder
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();

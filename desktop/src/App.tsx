@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeftRight, ArrowRight, Check, ChevronRight, Eye, Folder, LoaderCircle, Pause, Play, Plus, Power, RefreshCw, Settings, X, TriangleAlert } from 'lucide-react';
 import { message, native, rpc, type Conflict, type FolderPage, type Pair, type Preview, type Snapshot } from './api';
+import { invoke } from '@tauri-apps/api/core';
 type Page = 'Folders' | 'Conflicts' | 'Preferences';
 const compactPath = (path: string) => path.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/Users\/[^/]+\//, '~/');
 const bytes = (value?: number) => value === undefined ? 'Unavailable' : value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
@@ -46,7 +47,22 @@ export default function App() {
   const [login, setLogin] = useState(false);
   const [preview, setPreview] = useState<{ pairId: string; result: Preview; wasPaused: boolean }>();
   const [stopping, setStopping] = useState(false);
+  const reportedNativeView = useRef(false);
   const refresh = useCallback(async () => { const value = await rpc<Snapshot>('snapshot'); setSnapshot(value); }, []);
+  useEffect(() => {
+    if (import.meta.env.VITE_FREESYNC_NATIVE_PROBE !== '1' || !native || !snapshot || reportedNativeView.current) return;
+    reportedNativeView.current = true;
+    const heading = document.querySelector('main h1');
+    void invoke('native_ui_probe', { report: {
+      mounted: !!document.querySelector('.app-shell') && heading?.textContent === 'Folders',
+      pair_count: document.querySelectorAll('.pair-row').length,
+      account_connected: document.querySelector('.account-status span:not(.status-dot)')?.textContent === 'Connected',
+      pause_available: [...document.querySelectorAll('button')].some(button => button.textContent === 'Pause' && !button.disabled),
+      width: innerWidth, height: innerHeight,
+      document_width: document.documentElement.scrollWidth,
+      heading_pixels: heading ? parseFloat(getComputedStyle(heading).fontSize) : 0,
+    } }).catch(() => {});
+  }, [snapshot]);
   useEffect(() => {
     let cancelled = false; let timer: ReturnType<typeof setTimeout>;
     async function poll() {
@@ -88,7 +104,7 @@ export default function App() {
   };
   const good = !!pair?.enabled && !paused && !pair.status.error && !pair.status.conflicts && !pair.deletion_hold;
   const footer = stopping ? 'Saving progress and stopping…' : paused ? 'Sync is paused' : snapshot?.pairs.some(p => p.enabled) ? 'Sync is running' : 'Choose a folder to start syncing';
-  return <div className="app-shell" data-window-visible={snapshot?.window_visible} data-tray-available={snapshot?.tray_available}>
+  return <div className="app-shell" data-window-visible={snapshot?.window_visible} data-tray-available={snapshot?.tray_available} data-native-view-ready={snapshot?.native_ui?.mounted} data-native-ipc-verified={snapshot?.native_ui?.ipc_verified}>
     <aside className="sidebar"><div className="wordmark">FreeSync</div><nav aria-label="Main navigation">{(['Folders', 'Conflicts', 'Preferences'] as Page[]).map(name => {
       const Icon = name === 'Folders' ? Folder : name === 'Conflicts' ? ArrowLeftRight : Settings;
       return <button key={name} className={page === name ? 'nav-link selected' : 'nav-link'} aria-current={page === name ? 'page' : undefined} onClick={() => setPage(name)}><Icon />{name}{name === 'Conflicts' && !!snapshot?.conflicts.length && <span className="count">{snapshot.conflicts.length}</span>}</button>;

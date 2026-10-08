@@ -9,10 +9,54 @@ use axum::{
     routing::{get, post},
 };
 use freesync_core::{Error, ErrorCode, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc};
 use tauri::Manager;
+/// Read-only evidence submitted by our actual WebKit frontend over native IPC.
+/// Only flags, counts and geometry are accepted; no UI text or private values.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeViewReport {
+    mounted: bool,
+    pair_count: usize,
+    account_connected: bool,
+    pause_available: bool,
+    width: u32,
+    height: u32,
+    document_width: u32,
+    heading_pixels: f64,
+}
+pub fn record_native_view(app: &tauri::AppHandle, report: NativeViewReport) -> Result<()> {
+    if !cfg!(debug_assertions) || std::env::var_os("FREESYNC_BROWSER_TEST").is_none() {
+        return Err(Error::new(
+            ErrorCode::Unsupported,
+            "Native view evidence requires debug QA.",
+        ));
+    }
+    let profile = &app.state::<Arc<crate::backend::AppState>>().profile;
+    let mut value = serde_json::to_value(report)?;
+    value["process"] = json!(std::process::id());
+    value["ipc_verified"] = json!(true);
+    value["at"] = json!(freesync_google::auth::now());
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options
+        .open(profile.join("native-view.json"))?
+        .write_all(serde_json::to_string(&value)?.as_bytes())?;
+    Ok(())
+}
+pub fn native_view(profile: &std::path::Path) -> Option<Value> {
+    let value: Value =
+        serde_json::from_slice(&std::fs::read(profile.join("native-view.json")).ok()?).ok()?;
+    (value["process"] == std::process::id()).then_some(value)
+}
 #[derive(Clone)]
 struct Bridge {
     app: tauri::AppHandle,
