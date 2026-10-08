@@ -1,10 +1,10 @@
 # Google Drive OAuth setup
 
-OAuth prerequisites were completed and verified on 8 October 2026. The sync engine, folder mappings, logout UI and complete Phase 3 read-only adapter still need implementation.
+OAuth prerequisites and the Rust Phase 3 adapter were completed and verified on 8 October 2026. Live transfers and the desktop interface are still under development; see [implementation progress](PROGRESS.md).
 
 ## Google Cloud configuration
 
-- Project: `freesync-bruno-loff` (FreeSync).
+- Project: `your-google-cloud-project` (FreeSync).
 - Google Drive API enabled.
 - External OAuth audience; publishing status **In production**.
 - Desktop app client: FreeSync Linux. The active public client ID is recorded in the private local metadata file.
@@ -31,7 +31,7 @@ The configuration directory is `${XDG_CONFIG_HOME:-$HOME/.config}/freesync`, out
 
 Read `oauth-bootstrap.json` for the selected account. Do not retrieve or print the keyring value just to check that it exists. `scripts/google_oauth.py verify --account ACCOUNT` refreshes authorization and prints only safe verification results.
 
-The bootstrap uses Google's installed-app library with PKCE, state validation, an IPv4 loopback callback on a random port, explicit offline access and account matching. It suppresses callback logs and external exception details that might contain credentials. Open the authorization URL in a normal browser. The eventual Rust implementation must preserve these properties and use native credential stores on all three platforms. [Desktop OAuth guidance](https://developers.google.com/identity/protocols/oauth2/native-app)
+The Python bootstrap and Rust implementation use PKCE, state validation, an IPv4 loopback callback on a random port, explicit offline access and account matching. Callback logs and external exception details are suppressed. Open the authorization URL in a normal browser. Rust uses Linux Secret Service, with native credential-store adapters for macOS and Windows awaiting Phase 11 platform validation. [Desktop OAuth guidance](https://developers.google.com/identity/protocols/oauth2/native-app)
 
 ## Verified results
 
@@ -42,7 +42,7 @@ The bootstrap uses Google's installed-app library with PKCE, state validation, a
 - Six offline tests passed, covering incorrect client type, unexpected endpoints, account mismatch, missing refresh tokens, private metadata without secrets and exception redaction.
 - Public source files were checked for credential patterns before publication.
 
-These checks were read-only. No Drive files or existing local synchronized files were changed. Automated integration mutations remain limited to the designated `test-freesync` pair. The remote folder ID must still be identified before live test writes.
+The original OAuth checks were read-only. Rust sign-in and forced refresh were subsequently verified in fresh processes. The local/remote `test-freesync` pair and separate read-only existing-tree mapping are now recorded in private `development.json`. Integration mutations remain restricted to the designated test pair; the existing synchronized tree has not been adopted.
 
 ## Repository and site
 

@@ -9,3 +9,11 @@ client_secret*.json
 google-client.json
 token*.json
 oauth-bootstrap.json
+
+development.json
+state.sqlite3*
+/profiles/
+/staging/
+/recovery/
+*.tsbuildinfo
+desktop/src-tauri/gen/

@@ -9,7 +9,7 @@
   <h1>FreeSync</h1>
   <p class="intro">Keep local folders and Google Drive in sync.</p>
   <p>FreeSync is a desktop file synchronization application being developed for Linux, Windows and macOS. Its intended features include watching local file changes, detecting changes on Google Drive, transferring files and resolving conflicts.</p>
-  <p>Development currently includes a Google OAuth authorization helper. Automatic synchronization and the desktop interface are still being built.</p>
+  <p>Development now includes a Rust sync engine, native Google OAuth, guarded two-way transfers, recovery storage and a Tauri desktop settings interface. Live transfer tests pass; automatic-sync and Linux desktop acceptance checks are in progress. Existing-folder adoption and cross-platform installers come in later phases.</p>
   <h2>Connecting Google Drive</h2>
   <p>You authorize FreeSync with Google in your browser. FreeSync needs permission to see, edit, create and delete Drive files so it can work with existing folders and files. That Google permission covers the whole account; folder restrictions are enforced by FreeSync itself. Automated development tests are limited to a designated test folder.</p>
   <p>FreeSync runs locally. It has no central service for receiving your Drive files or account credentials. Refresh tokens are saved in the operating system credential store.</p>

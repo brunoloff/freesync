@@ -2,7 +2,7 @@
 
 FreeSync will synchronize selected local folders with Google Drive on Linux, Windows, and macOS. The implementation will use a Rust sync engine, SQLite for persistent state, and a Tauri 2 desktop interface. The engine will run independently of the settings window and expose the same operations through a command line interface for testing and recovery.
 
-This roadmap defines a complete first version and stable stopping points for implementation goals. Phases are cumulative: completing Phase 7 means completing Phases 1 through 7 and their acceptance checks. Implementation phases remain pending. The OAuth prerequisites for Phase 3 have been completed separately; see [OAuth setup](OAUTH_SETUP.md). This does not complete the read-only Drive adapter or its other acceptance checks.
+This roadmap defines a complete first version and stable stopping points for implementation goals. Phases are cumulative: completing Phase 7 means completing Phases 1 through 7 and their acceptance checks. Current evidence and remaining acceptance checks are tracked in [implementation progress](PROGRESS.md). OAuth setup is documented separately in [OAuth setup](OAUTH_SETUP.md).
 
 ## Scope and existing files
 
@@ -10,11 +10,11 @@ The first version includes automatic two-way sync, multiple Google accounts and 
 
 OneDrive and other providers come after this roadmap. The architecture will allow them, but implementing another provider is not required for version 1. Online-only placeholders, filesystem mounts, file-manager overlays, shared-drive administration, and editing Google-native documents through local office files are also later extensions.
 
-Bruno already has an InSync-managed tree at `/home/bruno/Crapbox`. He intends to turn off InSync before live FreeSync testing. FreeSync must verify that it is not competing with another sync process before starting a live test or adoption. The corresponding Google account has been confirmed through Drive OAuth and is recorded in private local configuration. Remote folder IDs and existing InSync exclusions still need to be established; do not assume that the local directory corresponds to a remote folder named Crapbox or to the account root.
+The user already has an InSync-managed tree at `the existing sync tree`. He intends to turn off InSync before live FreeSync testing. FreeSync must verify that it is not competing with another sync process before starting a live test or adoption. The corresponding Google account has been confirmed through Drive OAuth and is recorded in private local configuration. The remote mapping was established through read-only InSync and Drive inspection, as recorded in `PROGRESS.md`; adoption must still carry over and review existing InSync exclusions. Do not infer a mapping from a folder name alone.
 
-Existing files under `/home/bruno/Crapbox` may be used for read-only inventory and comparison. Development may create, edit, rename, and remove test files under `/home/bruno/Crapbox/test-freesync` and its explicitly paired remote test folder. Prefer a separate directory for each test run and clean up only that run's fixtures. Live integration tests must check both the local files and persisted Drive state.
+Existing files under `the existing sync tree` may be used for read-only inventory and comparison. Development may create, edit, rename, and remove test files under `the configured disposable test-freesync folder` and its explicitly paired remote test folder. Prefer a separate directory for each test run and clean up only that run's fixtures. Live integration tests must check both the local files and persisted Drive state.
 
-Until Bruno enables broader sync, automatic test mutations stay within those test roots. Implementation of adoption can finish with a real read-only inventory and successful migration tests in the sandbox; activating writes across the real Crapbox tree is a separate user action or explicit instruction.
+Until the user enables broader sync, automatic test mutations stay within those test roots. Implementation of adoption can finish with a real read-only inventory and successful migration tests in the sandbox; activating writes across the real existing sync tree tree is a separate user action or explicit instruction.
 
 ## Architecture and rules that apply throughout
 
@@ -48,7 +48,7 @@ These rules apply before any live writes:
 | 5 | Controlled transfers and recovery | Manually execute a tested sync plan |
 | 6 | Automatic sync in the test folder | A working sync engine through the CLI |
 | 7 | Desktop interface and tray | A usable desktop preview |
-| 8 | Adoption of the existing InSync tree | Ready to use existing Crapbox files |
+| 8 | Adoption of the existing InSync tree | Ready to use existing existing sync tree files |
 | 9 | Complete Google Drive workflows | Feature-complete version 1 |
 | 10 | Recovery, scale, and performance validation | A release candidate engine |
 | 11 | Cross-platform validation and installers | Installable desktop previews |
@@ -90,7 +90,7 @@ Connect FreeSync to the intended Google account and identify the actual remote r
 - Implement login through the system browser using PKCE, state validation, and a loopback callback; support refresh, expiry, revocation, logout, and unavailable credential stores. [Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app)
 - Verify scopes against the requirement to synchronize existing files. Google classifies broad `drive` access as restricted, while `drive.file` grants per-file app access; record applicable publishing requirements without assuming an app-created folder provides access to an existing tree. [Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
 - Implement account identity, paginated folder listing, metadata, permission checks, and incremental change reads. Select roots by file ID and preserve their ancestry.
-- Identify the remote counterpart of `test-freesync` and record a separate read-only mapping for the existing Crapbox tree. Inventory any accessible InSync configuration without editing it.
+- Identify the remote counterpart of `test-freesync` and record a separate read-only mapping for the existing existing sync tree tree. Inventory any accessible InSync configuration without editing it.
 
 **Complete when** real login succeeds, the expected account identity is confirmed, and metadata for the intended folders is retrieved across pagination. Token refresh and failure handling must be exercised. Fake-provider success alone does not complete this phase.
 
@@ -163,12 +163,12 @@ Reuse already synchronized files without treating the tree as a fresh upload or 
 - Add an adoption workflow that verifies account and root identity, inventories both sides, carries over confirmed exclusions, and presents initial discrepancies.
 - Match existing local content to remote file IDs. Record equivalent files as already synchronized; preserve ambiguous duplicates and changed files as unresolved differences.
 - Establish a consistent baseline despite changes occurring during scanning. Resuming after cancellation must preserve verified matches and recheck stale comparisons.
-- Start adoption with a read-only report for the real `/home/bruno/Crapbox` tree. Separate matching from execution and support gradually enabling selected subfolders.
+- Start adoption with a read-only report for the real `the existing sync tree` tree. Separate matching from execution and support gradually enabling selected subfolders.
 - Show how to pause or exit FreeSync and return to InSync without erasing either side. Keep a backup of FreeSync configuration and its adoption manifest.
 
-**Complete when** a seeded migration fixture adopts unchanged files without transfer or duplicate creation, isolates intentional mismatches, and survives interruption. Produce a real read-only Crapbox adoption report containing counts, unresolved cases, and proposed changes. The adoption UI must make the scope visible before activation.
+**Complete when** a seeded migration fixture adopts unchanged files without transfer or duplicate creation, isolates intentional mismatches, and survives interruption. Produce a real read-only existing sync tree adoption report containing counts, unresolved cases, and proposed changes. The adoption UI must make the scope visible before activation.
 
-**Activation boundary:** completing this implementation phase does not itself authorize automatic writes across the real Crapbox tree. Bruno can activate the reviewed profile in the app or explicitly instruct us to do so.
+**Activation boundary:** completing this implementation phase does not itself authorize automatic writes across the real existing sync tree tree. The user can activate the reviewed profile in the app or explicitly instruct us to do so.
 
 ## Phase 9 Complete Google Drive workflows
 
@@ -232,7 +232,7 @@ Deliver version 1 with documented installation, migration, recovery, and mainten
 
 ## How to use this roadmap for implementation goals
 
-A useful first goal is: "Implement FreeSync through Phase 6 in PLAN.md. Use the existing Crapbox files for read-only inspection and confine live sync tests to test-freesync. Complete each phase's acceptance checks and document the evidence."
+A useful first goal is: "Implement FreeSync through Phase 6 in PLAN.md. Use the existing existing sync tree files for read-only inspection and confine live sync tests to test-freesync. Complete each phase's acceptance checks and document the evidence."
 
 Choose Phase 7 for a desktop preview, Phase 8 for adoption readiness, Phase 9 for the version 1 feature set, or Phase 12 for the complete app and release preparation.
 

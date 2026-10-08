@@ -1,0 +1,20 @@
+import { invoke } from '@tauri-apps/api/core';
+export const native = '__TAURI_INTERNALS__' in window;
+export interface AppError { code: string; message: string }
+export async function rpc<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  if (native) return invoke<T>('settings', { command, args });
+  const response = await fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-FreeSync': '1' }, body: JSON.stringify({ command, args }) });
+  const value = await response.json();
+  if (!response.ok) throw value.error ?? { code: 'io', message: 'FreeSync stopped or the settings connection expired. Open settings again.' };
+  return value.ok as T;
+}
+export function message(error: unknown): string {
+  return error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : 'The settings connection is unavailable. Reopen FreeSync and try again.';
+}
+export interface Status { state: string; queued: number; conflicts: number; last_sync?: number; error?: AppError; current_path?: string; progress_bytes: number; total_bytes: number; retry_at?: number }
+export interface Pair { id: string; account: string; local_root: string; remote_id: string; remote_name: string; enabled: boolean; poll_secs: number; deletion_limit: number; status: Status; deletion_hold: boolean; deletion_count: number }
+export interface Conflict { pair_id: string; path: string; reason: string; can_keep_both: boolean; local_bytes?: number; remote_bytes?: number }
+export interface Snapshot { account?: string; account_verified: boolean; pairs: Pair[]; conflicts: Conflict[]; controls: { paused: boolean; quit: boolean }; preferences: { notifications: boolean }; autostart: boolean; recovery_directory: string; window_visible: boolean; tray_available: boolean; engine_error?: AppError }
+export interface Preview { counts: { operations: number; conflicts: number; skipped: number; matched: number }; operations: { path: string; action: { kind: string }; reason: string }[]; conflicts: { path: string; reason: string }[]; skipped: { path: string; reason: string }[]; matched: { path: string; reason: string }[] }
+export interface Folder { id: string; name: string; writable: boolean }
+export interface FolderPage { id: string; name: string; folders: Folder[]; next?: string }
