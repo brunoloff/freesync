@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeftRight, ArrowRight, Check, ChevronRight, Eye, FileDiff, Folder, LoaderCircle, Minus, Pause, Play, Plus, Power, RefreshCw, Settings, X, TriangleAlert } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, Check, ChevronRight, Eye, History, FileDiff, Folder, LoaderCircle, Minus, Pause, Play, Plus, RefreshCw, Settings, X, TriangleAlert } from 'lucide-react';
 import { message, native, rpc, type Conflict, type ConflictChoice, type ConflictJob, type FolderPage, type Pair, type Preview, type Snapshot } from './api';
+import Activity from './Activity';
 import { invoke } from '@tauri-apps/api/core';
-type Page = 'Folders' | 'Conflicts' | 'Preferences';
+type Page = 'Folders' | 'Conflicts' | 'Activity' | 'Preferences';
 const compactPath = (path: string) => path.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/Users\/[^/]+\//, '~/');
 const bytes = (value?: number) => value === undefined ? 'Unavailable' : value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
 function statusLabel(pair: Pair, paused: boolean): string {
@@ -46,7 +47,6 @@ export default function App() {
   const [pairDialog, setPairDialog] = useState(false);
   const [login, setLogin] = useState(false);
   const [preview, setPreview] = useState<{ pairId: string; result: Preview; wasPaused: boolean }>();
-  const [stopping, setStopping] = useState(false);
   const [pendingConflicts, setPendingConflicts] = useState<Set<string>>(() => new Set());
   const pendingConflictIds = useRef(new Set<string>());
   const [conflictErrors, setConflictErrors] = useState<Record<string, string>>({});
@@ -116,10 +116,6 @@ export default function App() {
     finally { setBusy(false); }
   };
   const control = (name: string) => { void action('control', { action: name }).catch(() => {}); };
-  const quit = () => {
-    setStopping(true); setError('');
-    void rpc('quit').catch(e => { setStopping(false); setError(message(e)); });
-  };
   const pair = snapshot?.pairs.find(p => p.id === selected) ?? snapshot?.pairs[0];
   const paused = snapshot?.controls.paused ?? false;
   const prepare = async (pairId: string) => {
@@ -142,13 +138,13 @@ export default function App() {
     finally { pendingConflictIds.current.delete(conflict.id); setPendingConflicts(new Set(pendingConflictIds.current)); }
   };
   const good = !!pair?.enabled && !paused && !pair.status.error && !pair.status.conflicts && !pair.deletion_hold;
-  const footer = stopping ? 'Saving progress and stopping…' : paused ? 'Sync is paused' : snapshot?.pairs.some(p => p.enabled) ? 'Sync is running' : 'Choose a folder to start syncing';
+  const footer = paused ? 'Sync is paused' : snapshot?.pairs.some(p => p.enabled) ? 'Sync is running' : 'Choose a folder to start syncing';
   return <div className="app-shell" data-window-visible={snapshot?.window_visible} data-tray-available={snapshot?.tray_available} data-native-view-ready={snapshot?.native_ui?.mounted} data-native-ipc-verified={snapshot?.native_ui?.ipc_verified}>
-    <aside className="sidebar"><div className="wordmark">FreeSync</div><nav aria-label="Main navigation">{(['Folders', 'Conflicts', 'Preferences'] as Page[]).map(name => {
-      const Icon = name === 'Folders' ? Folder : name === 'Conflicts' ? ArrowLeftRight : Settings;
+    <aside className="sidebar"><div className="wordmark">FreeSync</div><nav aria-label="Main navigation">{(['Folders', 'Conflicts', 'Activity'] as Page[]).map(name => {
+      const Icon = name === 'Folders' ? Folder : name === 'Conflicts' ? ArrowLeftRight : History;
       return <button key={name} className={page === name ? 'nav-link selected' : 'nav-link'} aria-current={page === name ? 'page' : undefined} onClick={() => setPage(name)}><Icon />{name}{name === 'Conflicts' && !!snapshot?.conflicts.length && <span className="count">{snapshot.conflicts.length}</span>}</button>;
-    })}</nav><div className="sidebar-bottom"><div className="account-status"><span className="status-dot" /><div><strong>Personal Google account</strong><span>{snapshot?.account_verified ? 'Connected' : snapshot?.account ? 'Checking connection' : 'Not connected'}</span></div></div><div className="sidebar-actions"><button onClick={() => { void action('hide').catch(() => {}); }}><Eye />Hide settings</button><button disabled={busy || stopping} onClick={quit}><Power />Quit</button></div></div></aside>
-    <div className="main-shell"><main><header className="page-heading"><div><h1>{page}</h1><p>{page === 'Folders' ? 'Choose what stays in sync.' : page === 'Conflicts' ? 'Preserve both versions when changes overlap.' : 'Make FreeSync work the way you want.'}</p></div><div className="heading-actions"><button disabled={busy || stopping} onClick={() => control(paused ? 'resume' : 'pause')}>{paused ? <Play /> : <Pause />}{paused ? 'Resume' : 'Pause'}</button><button disabled={busy || stopping} onClick={() => control('sync_now')}><RefreshCw />Sync now</button></div></header>
+    })}</nav><div className="sidebar-bottom"><div className="account-status"><span className="status-dot" /><div><strong>Personal Google account</strong><span>{snapshot?.account_verified ? 'Connected' : snapshot?.account ? 'Checking connection' : 'Not connected'}</span></div></div><div className="sidebar-actions"><button className={page === 'Preferences' ? 'nav-link selected' : 'nav-link'} aria-current={page === 'Preferences' ? 'page' : undefined} onClick={() => setPage('Preferences')}><Settings />Preferences</button></div></div></aside>
+    <div className="main-shell"><main><header className="page-heading"><div><h1>{page}</h1><p>{page === 'Folders' ? 'Choose what stays in sync.' : page === 'Conflicts' ? 'Preserve both versions when changes overlap.' : page === 'Activity' ? 'See what happened and investigate sync problems.' : 'Make FreeSync work the way you want.'}</p></div><div className="heading-actions"><button disabled={busy} onClick={() => control(paused ? 'resume' : 'pause')}>{paused ? <Play /> : <Pause />}{paused ? 'Resume' : 'Pause'}</button><button disabled={busy} onClick={() => control('sync_now')}><RefreshCw />Sync now</button></div></header>
       {error && <div role="alert" className="banner error"><TriangleAlert /><span>{error}</span><button aria-label="Dismiss error" className="icon-button" onClick={() => setError('')}><X /></button></div>}
       {snapshot && !snapshot.window_visible && <div role="status" className="banner"><Eye /><span>Settings are hidden. Sync continues in the tray.</span><button onClick={() => { void action('show').catch(() => {}); }}>Show settings</button></div>}
       {notice && <div role="status" className="banner"><Check /><span>{notice}</span><button aria-label="Dismiss message" className="icon-button" onClick={() => setNotice('')}><X /></button></div>}
@@ -163,7 +159,7 @@ export default function App() {
       </> : page === 'Conflicts' ? <section className="conflict-list">
         {snapshot.conflicts.length ? snapshot.conflicts.map(c => <ConflictRow key={c.id} conflict={c} job={snapshot.conflict_jobs.find(j => j.conflict_id === c.id)} pending={pendingConflicts.has(c.id)} error={conflictErrors[c.id]} onAction={choice => { void resolve(c, choice); }} />) : <div className="empty"><Check /><h3>No conflicts</h3><p>Your folder pairs have no unresolved conflicts.</p></div>}
         {snapshot.conflict_jobs.some(j => !['done', 'failed'].includes(j.state)) && <section className="background-actions" aria-label="Background conflict actions"><h2>Background actions</h2>{snapshot.conflict_jobs.filter(j => !['done', 'failed'].includes(j.state)).map(j => <div key={j.id} role="status"><LoaderCircle className="spin" /><div><strong>{j.path}</strong><span>{j.state === 'syncing' && paused ? 'Waiting for sync to resume' : jobLabel(j)}</span></div></div>)}</section>}
-      </section> : <section className="preferences">
+      </section> : page === 'Activity' ? <Activity /> : <section className="preferences">
         <div className="preference-row"><div><h2>Google account</h2><p>{snapshot.account ?? 'Connect an account to browse Drive.'}</p></div><button disabled={busy} onClick={() => setLogin(true)}>{snapshot.account ? 'Reconnect' : 'Connect Google account'}</button></div>
         <div className="preference-row"><div><h2>Start FreeSync at login</h2><p>Keep syncing in the tray when you sign in to this computer.</p></div><input aria-label="Start FreeSync at login" type="checkbox" className="switch" checked={snapshot.autostart} disabled={busy} onChange={e => { void action('preferences', { ...snapshot.preferences, autostart: e.target.checked }).catch(() => {}); }} /></div>
         <div className="preference-row"><div><h2>Notifications</h2><p>Notify you when sync needs attention.</p><button className="text-button" disabled={busy} onClick={() => { void action('notify_test').then(result => { const delivery = result as { inhibited?: boolean; accepted?: boolean }; setNotice(delivery.inhibited ? 'Your desktop is currently suppressing notifications (Do Not Disturb or presentation mode). The test was accepted, but its popup may be hidden.' : delivery.accepted ? 'Your desktop accepted the test notification. If its popup is hidden, check the system notification settings.' : 'Test notification requested. Check the system notification settings if no popup appears.'); }).catch(() => {}); }}>Test notification</button></div><input aria-label="Notifications" type="checkbox" className="switch" checked={snapshot.preferences.notifications} disabled={busy} onChange={e => { void action('preferences', { notifications: e.target.checked }).catch(() => {}); }} /></div>

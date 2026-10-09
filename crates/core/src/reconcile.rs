@@ -7,6 +7,44 @@ pub async fn prepare(
     pair: &PairConfig,
     provider: &dyn Provider,
 ) -> Result<Plan> {
+    let started = std::time::Instant::now();
+    let mut entry = crate::activity::Entry::new(
+        "scan",
+        "started",
+        "Rechecking local files and Drive changes",
+    );
+    entry.pair_id = Some(pair.id.clone());
+    db.record_activity(&entry)?;
+    let result = prepare_inner(db, pair, provider).await;
+    entry.at_ms = crate::activity::Entry::new("scan", "completed", "").at_ms;
+    entry.details.duration_ms = Some(started.elapsed().as_millis() as u64);
+    match &result {
+        Ok(plan) => {
+            entry.outcome = "completed".into();
+            entry.details.changes = Some(plan.operations.len());
+            entry.details.conflicts = Some(plan.conflicts.len());
+            entry.details.skipped = Some(plan.skipped.len());
+            entry.message = format!(
+                "Comparison complete: {} changes, {} conflicts, {} skipped items",
+                plan.operations.len(),
+                plan.conflicts.len(),
+                plan.skipped.len()
+            );
+        }
+        Err(error) => {
+            entry.outcome = "error".into();
+            entry.details.error_code = Some(error.code);
+            entry.message = error.message.clone();
+        }
+    }
+    db.record_activity(&entry)?;
+    result
+}
+async fn prepare_inner(
+    db: &mut Database,
+    pair: &PairConfig,
+    provider: &dyn Provider,
+) -> Result<Plan> {
     let local = local::scan(&pair.local_root, &pair.excludes)?;
     if local.root_identity != pair.root_identity {
         return Err(Error::new(

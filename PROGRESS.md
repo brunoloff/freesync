@@ -73,3 +73,11 @@ These are focused checks for the refinements. The earlier three-hour run validat
 ## Development environment
 
 Rust 1.96.1, Node 24 and required Linux GTK/WebKit/AppIndicator development libraries are present. Installed the official Clippy component. InSync was not running at the initial process check. The workspace's existing protected `.git` directory is empty and has been preserved; earlier repository publication used an isolated temporary Git checkout.
+
+## Before Phase 8 — Activity and tray refinements
+
+Added durable local activity history and a filterable, sortable Activity tab. History records scans, queued/started/completed transfers, bounded progress checkpoints, conflicts and decisions, recovery, controls, lifecycle and desktop failures. Filters cover literal case-insensitive file name/path, minimum/maximum file size (B/KB/MB/GB), action, outcome and time; eight sort choices and anchored 50-event pages support navigation while new events arrive. Expanded details show exact bytes, operation/decision IDs, attempts, retry/error codes, recovery locations and scan duration/counts. Schema 2 adds history without replacing existing sync state; a private pre-upgrade backup was saved. Detailed rotating JSON logs mirror durable SQLite history; failed mirroring leaves history available and retries later.
+
+Removed Hide settings and Quit from the GUI; Preferences occupies the bottom sidebar, which remains visible alongside long desktop activity lists. Window close still hides settings. Primary tray activation toggles native visibility; the context menu retains Open settings, Pause/Resume, Sync now and Quit. Linux uses a StatusNotifierItem backend because the preceding AppIndicator backend does not deliver primary-click events; other platforms retain the Tauri tray path.
+
+Five focused history tests cover schema upgrade/preserved state, literal/Unicode search, zero and unknown file sizes, safe ranges/sorting, anchored pagination during insertion, restart/deduplication, secret exclusion, log-write failures and rotation. The full Rust suite now has 51 passing tests; frontend builds and warning-free Clippy checks passed. Live Linux and browser checks are recorded in DESKTOP_TESTING.md. Phase 8 and large-tree validation have not started.

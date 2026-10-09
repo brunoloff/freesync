@@ -58,7 +58,7 @@ cargo build -p freesync-desktop
 ./target/debug/freesync-desktop
 ```
 
-The binary embeds the built frontend and needs no development web server. Rebuild the frontend and binary after UI changes. Close the settings window to keep the engine running in the tray. Use Quit to save progress and stop. The CLI and desktop share an exclusive profile owner; stop one before starting the other. Startup at login is optional and disabled until selected.
+The binary embeds the built frontend and needs no development web server. Rebuild the frontend and binary after UI changes. Close the settings window to keep the engine running in the tray. Left-click the tray icon to show or hide the window; right-click for the menu, including Quit to save progress and stop. The CLI and desktop share an exclusive profile owner; stop one before starting the other. Startup at login is optional and disabled until selected.
 
 The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. Phase 7 accepts only the private authorized test pair. Existing Crapbox adoption remains Phase 8; large-folder performance validation remains Phase 10.
 
@@ -76,7 +76,7 @@ cargo build -p freesync-desktop --features browser-test
 FREESYNC_BROWSER_TEST=1 ./target/debug/freesync-desktop
 ```
 
-The design references and extracted UI system are in [design/DESIGN.md](design/DESIGN.md). Operational logs contain counts and typed error codes only, with bounded rotation; transfer and recovery state remains private.
+The design references and extracted UI system are in [design/DESIGN.md](design/DESIGN.md). The Activity tab stores local history across restarts, with name/path, file-size, action, outcome and time filters, sorting and pagination. Expand an event for operation IDs, exact sizes, attempts, retries, error codes, scan duration or recovery locations. Open logs folder reveals the private profile: `activity.jsonl` mirrors this detailed history, while `events.jsonl` retains count-only engine summaries. JSON logs rotate after 2 MiB with one previous file; SQLite history is retained without automatic pruning. History begins when this version starts; earlier transfers are not reconstructed. File contents, OAuth credentials and resumable upload URLs are excluded.
 
 ## OAuth helper
 

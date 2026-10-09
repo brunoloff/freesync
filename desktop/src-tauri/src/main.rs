@@ -3,6 +3,7 @@ mod backend;
 #[cfg(feature = "browser-test")]
 mod browser_test;
 mod desktop;
+mod tray;
 use backend::{AppState, Preferences};
 use freesync_core::{Error, ErrorCode, Result, engine::EngineCommand};
 use serde_json::{Value, json};
@@ -10,11 +11,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tauri::{
-    Manager,
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
-};
+use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
@@ -31,6 +28,13 @@ fn show(app: &tauri::AppHandle) -> Result<Value> {
     window.unminimize().map_err(|_| platform_error())?;
     window.show().map_err(|_| platform_error())?;
     window.set_focus().map_err(|_| platform_error())?;
+    if let Ok(db) = app.state::<Arc<AppState>>().database() {
+        let _ = db.record_activity(&freesync_core::activity::Entry::new(
+            "desktop",
+            "info",
+            "Settings shown",
+        ));
+    }
     Ok(json!({"visible":true}))
 }
 fn shutdown(app: tauri::AppHandle) {
@@ -50,6 +54,41 @@ fn shutdown(app: tauri::AppHandle) {
 /// No file contents, credential values, upload-session URLs or arbitrary commands
 /// cross this boundary. The test bridge is excluded from normal builds.
 pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Result<Value> {
+    let result = dispatch_inner(app.clone(), command, args).await;
+    // Record authored outcomes only, never OAuth arguments, arbitrary RPC data or URLs.
+    let message = match command {
+        "notify_test" => Some("Test notification requested"),
+        "open_logs" => Some("Application logs folder opened"),
+        "open_recovery" => Some("Recovery folder opened"),
+        "preferences" => Some("Preferences updated"),
+        _ => None,
+    };
+    let read = matches!(command, "snapshot" | "activity" | "folders");
+    if !read
+        && (message.is_some() || result.is_err())
+        && let Ok(db) = app.state::<Arc<AppState>>().database()
+    {
+        let mut entry = match &result {
+            Ok(_) => freesync_core::activity::Entry::new(
+                "desktop",
+                "info",
+                message.unwrap_or("Desktop action completed"),
+            ),
+            Err(error) => {
+                let mut e =
+                    freesync_core::activity::Entry::new("desktop", "error", error.message.clone());
+                e.details.error_code = Some(error.code);
+                e
+            }
+        };
+        if command == "notify_test" && result.is_ok() {
+            entry.message = "Test notification submitted to the system notification service".into();
+        }
+        let _ = db.record_activity(&entry);
+    }
+    result
+}
+async fn dispatch_inner(app: tauri::AppHandle, command: &str, args: Value) -> Result<Value> {
     let state = app.state::<Arc<AppState>>().inner().clone();
     let text = |key: &str| {
         args.get(key)
@@ -69,7 +108,10 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
                 app.get_webview_window("main")
                     .is_some_and(|w| w.is_visible().unwrap_or(false))
             );
-            value["tray_available"] = json!(app.tray_by_id("freesync").is_some());
+            value["tray_available"] = json!(
+                app.try_state::<tray::Controller>()
+                    .is_some_and(|tray| tray.available())
+            );
             value["autostart"] = json!(
                 app.autolaunch()
                     .is_enabled()
@@ -79,6 +121,14 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
             if cfg!(debug_assertions) && std::env::var_os("FREESYNC_BROWSER_TEST").is_some() {
                 value["native_ui"] = json!(browser_test::native_view(&state.profile));
             }
+            Ok(value)
+        }
+        "activity" => {
+            let query: freesync_core::activity::Query = serde_json::from_value(args)?;
+            let db = state.database()?;
+            let mut value = serde_json::to_value(db.activity(&query)?)?;
+            value["log_error"] =
+                serde_json::to_value(db.get::<Option<Error>>("activity_log_error")?.flatten())?;
             Ok(value)
         }
         "control" => state.control(&text("action")?),
@@ -200,8 +250,12 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
                 .patch("preferences", &json!({"zoom":level}))?;
             Ok(json!({"zoom":level}))
         }
-        "open_recovery" => {
-            let directory = state.profile.join("recovery");
+        "open_recovery" | "open_logs" => {
+            let directory = if command == "open_logs" {
+                state.profile.clone()
+            } else {
+                state.profile.join("recovery")
+            };
             if std::fs::symlink_metadata(&directory).is_ok_and(|m| m.file_type().is_symlink()) {
                 return Err(platform_error());
             }
@@ -361,6 +415,13 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                if let Ok(db) = window.app_handle().state::<Arc<AppState>>().database() {
+                    let _ = db.record_activity(&freesync_core::activity::Entry::new(
+                        "desktop",
+                        "info",
+                        "Settings closed; sync continues in the tray",
+                    ));
+                }
             }
         })
         .setup(|app| {
@@ -372,30 +433,7 @@ fn main() {
             app.get_webview_window("main")
                 .ok_or_else(platform_error)?
                 .set_zoom(preferences.zoom.clamp(0.5, 2.0))?;
-            let status =
-                MenuItem::with_id(app, "status", "FreeSync is starting", false, None::<&str>)?;
-            let open = MenuItem::with_id(app, "show", "Open settings", true, None::<&str>)?;
-            let pause = MenuItem::with_id(app, "pause", "Pause sync", true, None::<&str>)?;
-            let resume = MenuItem::with_id(app, "resume", "Resume sync", true, None::<&str>)?;
-            let now = MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&status, &open, &pause, &resume, &now, &quit])?;
-            TrayIconBuilder::with_id("freesync")
-                .icon(icon())
-                .tooltip("FreeSync")
-                .menu(&menu)
-                .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        let _ = show(app);
-                    }
-                    "quit" => shutdown(app.clone()),
-                    "pause" | "resume" | "sync_now" => {
-                        let _ = app.state::<Arc<AppState>>().control(event.id.as_ref());
-                    }
-                    _ => (),
-                })
-                .build(app)?;
+            app.manage(tray::setup(app.handle())?);
             if std::env::args().any(|a| a == "--background") {
                 app.get_webview_window("main")
                     .ok_or_else(platform_error)?
@@ -440,12 +478,10 @@ fn main() {
                         } else {
                             "Up to date"
                         };
-                        let _ = status.set_text(label);
-                        let _ = pause.set_enabled(!paused);
-                        let _ = resume.set_enabled(paused);
-                        if let Some(tray) = handle.tray_by_id("freesync") {
-                            let _ = tray.set_tooltip(Some(format!("FreeSync — {label}")));
-                        }
+                        handle
+                            .state::<tray::Controller>()
+                            .update(label, paused)
+                            .await;
                         let attention = if error || conflicts > 0 { label } else { "" };
                         if !attention.is_empty()
                             && attention != last_attention

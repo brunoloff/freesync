@@ -1,4 +1,5 @@
 //! Provider-independent synchronization state and filesystem safety.
+pub mod activity;
 pub mod conflicts;
 pub mod db;
 pub mod diagnostics;

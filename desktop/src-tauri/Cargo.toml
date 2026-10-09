@@ -31,3 +31,4 @@ axum = { version = "0.8", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4"
 zbus = "5"
+ksni = "0.3.6"

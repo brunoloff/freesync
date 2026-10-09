@@ -37,7 +37,7 @@ fn migrations_persist_and_profiles_are_isolated() {
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let db = Database::open(a.path()).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 1);
+    assert_eq!(db.schema_version().unwrap(), 2);
     db.save_pair(&pair(a.path())).unwrap();
     drop(db);
     assert_eq!(Database::open(a.path()).unwrap().pairs().unwrap().len(), 1);
@@ -83,6 +83,7 @@ fn failed_plan_transaction_does_not_advance_inventory_or_cursor() {
         db.persist_plan("missing-pair", &plan, &local, &remote)
             .is_err()
     );
+    assert_eq!(db.activity(&Default::default()).unwrap().total, 0);
     assert!(
         db.get::<RemoteInventory>("remote:missing-pair")
             .unwrap()

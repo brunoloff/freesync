@@ -202,6 +202,11 @@ pub async fn run_controlled(
     mut requests: mpsc::Receiver<EngineRequest>,
 ) -> Result<()> {
     profile::private_directory(profile)?;
+    db.record_activity(&crate::activity::Entry::new(
+        "engine",
+        "started",
+        "Sync engine started; activity history is stored in this private profile",
+    ))?;
     crate::diagnostics::record(
         profile,
         crate::diagnostics::EventKind::EngineStarted,
@@ -335,6 +340,8 @@ pub async fn run_controlled(
                 Instant::now() + Duration::from_secs(pair.poll_secs.max(1)),
             );
         }
+        let log_error = db.flush_activity_log().err();
+        db.set("activity_log_error", &log_error)?;
         tokio::select! {
             _=cancel.cancelled()=>break,
             Some(id)=receiver.recv()=>{dirty.insert(id);},
@@ -351,6 +358,13 @@ pub async fn run_controlled(
     for pair in db.pairs()? {
         db.set_status(&status(db, &pair, "stopped", None)?)?;
     }
+    db.record_activity(&crate::activity::Entry::new(
+        "engine",
+        "completed",
+        "Sync engine stopped cleanly",
+    ))?;
+    let log_error = db.flush_activity_log().err();
+    db.set("activity_log_error", &log_error)?;
     crate::diagnostics::record(
         profile,
         crate::diagnostics::EventKind::EngineStopped,

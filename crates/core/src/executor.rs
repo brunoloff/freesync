@@ -65,6 +65,7 @@ fn checkpoint(db: &Database, cancel: &CancellationToken) -> Result<()> {
     Ok(())
 }
 fn progress(db: &Database, pair: &PairConfig, op: &Operation, done: u64, total: u64) -> Result<()> {
+    db.transfer_progress(op, done, total)?;
     let mut status = crate::engine::status(db, pair, "syncing", None)?;
     status.current_path = Some(op.path.clone());
     status.progress_bytes = done;

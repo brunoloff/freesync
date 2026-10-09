@@ -20,3 +20,5 @@ export interface Snapshot { account?: string; account_verified: boolean; pairs: 
 export interface Preview { counts: { operations: number; conflicts: number; skipped: number; matched: number }; operations: { path: string; action: { kind: string }; reason: string }[]; conflicts: { path: string; reason: string }[]; skipped: { path: string; reason: string }[]; matched: { path: string; reason: string }[] }
 export interface Folder { id: string; name: string; writable: boolean }
 export interface FolderPage { id: string; name: string; folders: Folder[]; next?: string }
+export interface ActivityEntry { id: number; at_ms: number; action: string; outcome: string; pair_id?: string; path?: string; size_bytes?: number; message: string; details: { operation_id?: string; from_path?: string; recovery_path?: string; attempt?: number; local_bytes?: number; drive_bytes?: number; bytes_done?: number; retry_at?: number; error_code?: string; duration_ms?: number; changes?: number; conflicts?: number; skipped?: number } }
+export interface ActivityPage { entries: ActivityEntry[]; matching: number; total: number; latest_id: number; limit: number; log_error?: AppError }
