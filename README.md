@@ -58,7 +58,7 @@ cargo build -p freesync-desktop
 ./target/debug/freesync-desktop
 ```
 
-The binary embeds the built frontend and needs no development web server. Rebuild the frontend and binary after UI changes. Close the settings window to keep the engine running in the tray. Left-click the tray icon to show or hide the window; right-click for the menu, including Quit to save progress and stop. The CLI and desktop share an exclusive profile owner; stop one before starting the other. Startup at login is optional and disabled until selected.
+The binary embeds the built frontend and needs no development web server. Rebuild the frontend and binary after UI changes. Close the settings window to keep the engine running in the tray. Left-click the tray icon to raise a hidden or background window, or hide it when already focused; right-click for the menu, including Quit to save progress and stop. The CLI and desktop share an exclusive profile owner; stop one before starting the other. Startup at login is optional and disabled until selected.
 
 The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. Phase 7 accepts only the private authorized test pair. Existing Crapbox adoption remains Phase 8; large-folder performance validation remains Phase 10.
 

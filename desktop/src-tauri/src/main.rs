@@ -27,7 +27,31 @@ fn show(app: &tauri::AppHandle) -> Result<Value> {
     let window = app.get_webview_window("main").ok_or_else(platform_error)?;
     window.unminimize().map_err(|_| platform_error())?;
     window.show().map_err(|_| platform_error())?;
+    #[cfg(not(target_os = "linux"))]
     window.set_focus().map_err(|_| platform_error())?;
+    #[cfg(target_os = "linux")]
+    {
+        let window = window.clone();
+        app.run_on_main_thread(move || {
+            use gtk::prelude::*;
+            if let Ok(native) = window.gtk_window() {
+                // Tray activation arrives over D-Bus, without a GTK input event.
+                // A fresh X11 user time lets the WM honor this explicit request.
+                let timestamp = native
+                    .window()
+                    .and_then(|surface| {
+                        surface.downcast::<gdkx11::X11Window>().ok().map(|x11| {
+                            let time = gdkx11::functions::x11_get_server_time(&x11);
+                            x11.set_user_time(time);
+                            time
+                        })
+                    })
+                    .unwrap_or_else(gtk::current_event_time);
+                native.present_with_time(timestamp);
+            }
+        })
+        .map_err(|_| platform_error())?;
+    }
     if let Ok(db) = app.state::<Arc<AppState>>().database() {
         let _ = db.record_activity(&freesync_core::activity::Entry::new(
             "desktop",
@@ -107,6 +131,10 @@ async fn dispatch_inner(app: tauri::AppHandle, command: &str, args: Value) -> Re
             value["window_visible"] = json!(
                 app.get_webview_window("main")
                     .is_some_and(|w| w.is_visible().unwrap_or(false))
+            );
+            value["window_focused"] = json!(
+                app.get_webview_window("main")
+                    .is_some_and(|w| w.is_focused().unwrap_or(false))
             );
             value["tray_available"] = json!(
                 app.try_state::<tray::Controller>()

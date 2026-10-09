@@ -9,6 +9,7 @@ pub fn toggle(app: &tauri::AppHandle) -> Result<()> {
     let window = app.get_webview_window("main").ok_or_else(platform_error)?;
     if window.is_visible().map_err(|_| platform_error())?
         && !window.is_minimized().map_err(|_| platform_error())?
+        && window.is_focused().map_err(|_| platform_error())?
     {
         window.hide().map_err(|_| platform_error())?;
         record(app, "Settings hidden by tray click");

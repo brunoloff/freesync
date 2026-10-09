@@ -1407,6 +1407,8 @@ dependencies = [
  "directories",
  "freesync-core",
  "freesync-google",
+ "gdkx11",
+ "gtk",
  "ksni",
  "notify-rust",
  "serde",

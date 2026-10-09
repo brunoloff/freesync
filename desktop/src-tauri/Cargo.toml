@@ -32,3 +32,5 @@ axum = { version = "0.8", optional = true }
 notify-rust = "4"
 zbus = "5"
 ksni = "0.3.6"
+gtk = "0.18"
+gdkx11 = "0.18"
