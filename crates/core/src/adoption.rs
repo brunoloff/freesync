@@ -1,4 +1,5 @@
 //! Read-only, checkpointed adoption. A report is never transfer authority.
+mod grouped;
 use crate::{local, profile, *};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -30,6 +31,10 @@ pub struct Progress {
     pub revision: u64,
     #[serde(default)]
     pub drive_passes: u64,
+    #[serde(default)]
+    pub remote_folders_checked: u64,
+    #[serde(default)]
+    pub remote_folders_total: u64,
     pub completed_at: Option<u64>,
     pub error: Option<Error>,
 }
@@ -149,7 +154,12 @@ impl Manifest {
             CREATE TABLE IF NOT EXISTS local(path TEXT PRIMARY KEY,json TEXT NOT NULL,seen INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS issues(path TEXT PRIMARY KEY,reason TEXT NOT NULL,side TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS findings(path TEXT PRIMARY KEY,status TEXT NOT NULL,json TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS finding_status ON findings(status,path);")?;
+            CREATE INDEX IF NOT EXISTS finding_status ON findings(status,path);
+            CREATE TABLE IF NOT EXISTS inventory_groups(id INTEGER PRIMARY KEY,json TEXT NOT NULL,verified INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS inventory_parents(id TEXT PRIMARY KEY,group_id INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS inventory_parent_group ON inventory_parents(group_id);
+            CREATE TABLE IF NOT EXISTS inventory_folder_candidates(id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS inventory_deltas(seq INTEGER PRIMARY KEY AUTOINCREMENT,json TEXT NOT NULL);")?;
         Ok(Self {
             db,
             directory: directory.canonicalize()?,
@@ -301,6 +311,11 @@ impl Manifest {
         if item.trashed {
             return self.mark_remote_unavailable(&item.id);
         }
+        if item.kind == ItemKind::Folder
+            && self.get::<String>("inventory_strategy")?.as_deref() == Some("parent_groups_v1")
+        {
+            self.db.execute("INSERT OR IGNORE INTO inventory_folder_candidates SELECT ?1 WHERE NOT EXISTS(SELECT 1 FROM inventory_parents WHERE id=?1)", [&item.id])?;
+        }
         self.db
             .execute("DELETE FROM unavailable WHERE id=?1", [&item.id])?;
         self.db
@@ -341,7 +356,7 @@ impl Manifest {
     }
     fn invalidate_remote(&self) -> Result<()> {
         let tx = self.db.unchecked_transaction()?;
-        self.db.execute_batch("DELETE FROM remote; DELETE FROM edges; DELETE FROM paths; DELETE FROM state WHERE key IN ('page','cursor','quiet_listing');")?;
+        self.db.execute_batch("DELETE FROM remote; DELETE FROM edges; DELETE FROM paths; DELETE FROM inventory_groups; DELETE FROM inventory_parents; DELETE FROM inventory_folder_candidates; DELETE FROM inventory_deltas; DELETE FROM state WHERE key IN ('page','cursor','quiet_listing','folders_done','folder_pages_done','folder_seen_pages','folder_census_pages','active_inventory_groups','inventory_folders_total','inventory_folders_checked');")?;
         self.set("remote_done", &false)?;
         tx.commit()?;
         Ok(())
@@ -352,6 +367,13 @@ impl Manifest {
         p: &mut Progress,
         cancel: &CancellationToken,
     ) -> Result<()> {
+        if provider.supports_grouped_inventory() {
+            return self.grouped_remote_scan(provider, p, cancel).await;
+        }
+        if self.get::<String>("inventory_strategy")?.as_deref() == Some("parent_groups_v1") {
+            self.invalidate_remote()?;
+            self.set("inventory_strategy", &"whole_account_v1")?;
+        }
         // files.list can shift when entries are added or removed. A change feed
         // merge alone cannot prove an unchanged item was not skipped by a page.
         // Require a complete quiet listing pass before declaring the report ready.
@@ -441,6 +463,22 @@ impl Manifest {
         result
     }
     async fn catch_up(&self, provider: &dyn Provider, cancel: &CancellationToken) -> Result<bool> {
+        let record = !self.get::<bool>("quiet_listing")?.unwrap_or_default();
+        let changed = self.consume_changes(provider, cancel, record).await?;
+        Ok(changed
+            || record
+                && self
+                    .db
+                    .query_row("SELECT EXISTS(SELECT 1 FROM inventory_deltas)", [], |r| {
+                        r.get::<_, bool>(0)
+                    })?)
+    }
+    async fn consume_changes(
+        &self,
+        provider: &dyn Provider,
+        cancel: &CancellationToken,
+        record: bool,
+    ) -> Result<bool> {
         let mut cursor = self.get::<String>("cursor")?.ok_or_else(|| {
             Error::new(
                 ErrorCode::IncompleteScan,
@@ -461,6 +499,17 @@ impl Manifest {
             let tx = self.db.unchecked_transaction()?;
             changed |= !response.changes.is_empty();
             for change in response.changes {
+                if record {
+                    let delta = grouped::Delta {
+                        before: self.observed_remote(&change.id)?,
+                        after: change.item.clone(),
+                        removed: change.removed,
+                    };
+                    self.db.execute(
+                        "INSERT INTO inventory_deltas(json) VALUES(?1)",
+                        [serde_json::to_string(&delta)?],
+                    )?;
+                }
                 if change.removed {
                     // Removed can mean lost access. Adoption never infers a deletion.
                     self.mark_remote_unavailable(&change.id)?;
@@ -580,6 +629,8 @@ impl Manifest {
     ) -> Result<()> {
         self.verify_local_root(source)?;
         let exclusions = local::Exclusions::new(&source.excludes)?;
+        let root_modified =
+            local::modified(&fs::symlink_metadata(&source.local_root)?)?.to_string();
         let run = self.get::<u64>("local_run")?.unwrap_or(0) + 1;
         self.set("local_run", &run)?;
         self.db
@@ -744,9 +795,29 @@ impl Manifest {
             .execute("DELETE FROM local WHERE seen<>?1", [run as i64])?;
         self.set("progress", p)?;
         tx.commit()?;
-        self.verify_local_root(source)
+        self.verify_local_root(source)?;
+        if local::modified(&fs::symlink_metadata(&source.local_root)?)?.to_string() != root_modified
+        {
+            return Err(Error::new(
+                ErrorCode::IncompleteScan,
+                "The local root changed during inventory. Resume rechecks the tree and keeps verified hashes.",
+            ));
+        }
+        self.set("local_root_modified", &root_modified)
     }
     fn verify_local_entries(&self, source: &Source, cancel: &CancellationToken) -> Result<()> {
+        if self.get::<String>("local_root_modified")?.as_deref()
+            != Some(
+                local::modified(&fs::symlink_metadata(&source.local_root)?)?
+                    .to_string()
+                    .as_str(),
+            )
+        {
+            return Err(Error::new(
+                ErrorCode::IncompleteScan,
+                "The local root changed before matching. Resume includes new top-level entries and keeps verified hashes.",
+            ));
+        }
         let mut statement = self.db.prepare("SELECT json FROM local ORDER BY path")?;
         for row in statement.query_map([], |r| r.get::<_, String>(0))? {
             cancelled(cancel)?;
@@ -936,6 +1007,11 @@ impl Manifest {
             p.phase = "rechecking".into();
             self.set("progress", &p)?;
             self.catch_up_or_reset(provider, cancel).await?;
+            if provider.supports_grouped_inventory() {
+                self.grouped_remote_scan(provider, &mut p, cancel).await?;
+                p.phase = "rechecking".into();
+                self.set("progress", &p)?;
+            }
             self.resolve_paths(&source, cancel)?;
             self.verify_local_entries(&source, cancel)?;
             let root_after = provider.get(&source.remote_root_id).await?;
@@ -1321,4 +1397,54 @@ fn simple_global_rule(rule: &str) -> bool {
         && !suffix
             .chars()
             .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\' | '/'))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn top_level_addition_invalidates_matching_and_resume_keeps_verified_hashes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("original.txt"), b"original").unwrap();
+        let source = Source {
+            account_email: "fixture@example.invalid".into(),
+            local_root: root.clone(),
+            remote_root_id: "root".into(),
+            root_identity: local::identity(&fs::metadata(&root).unwrap()).unwrap(),
+            excludes: Vec::new(),
+            exclusion_source: "Fixture rules".into(),
+        };
+        let manifest = Manifest::open(&temp.path().join("manifest")).unwrap();
+        manifest.initialize(&source).unwrap();
+        let cancel = CancellationToken::new();
+        let mut progress = Progress::default();
+        manifest
+            .local_scan(&source, &mut progress, &cancel)
+            .unwrap();
+        manifest.verify_local_entries(&source, &cancel).unwrap();
+
+        fs::write(root.join("added.txt"), b"added").unwrap();
+        // Deterministic even on file systems with coarse timestamp resolution.
+        fs::File::open(&root)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))
+            .unwrap();
+        assert_eq!(
+            manifest
+                .verify_local_entries(&source, &cancel)
+                .unwrap_err()
+                .code,
+            ErrorCode::IncompleteScan
+        );
+        manifest
+            .local_scan(&source, &mut progress, &cancel)
+            .unwrap();
+        manifest.verify_local_entries(&source, &cancel).unwrap();
+        assert_eq!(progress.local_items, 2);
+        assert_eq!(progress.reused_hashes, 1);
+        assert_eq!(fs::read(root.join("original.txt")).unwrap(), b"original");
+    }
 }

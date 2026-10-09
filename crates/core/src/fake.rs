@@ -18,11 +18,13 @@ pub enum Fault {
     RateLimit,
     UncertainSuccess,
     CursorExpired,
+    PageExpired,
 }
 #[derive(Clone)]
 pub struct FakeProvider {
     state: Arc<Mutex<State>>,
     page_size: usize,
+    grouped_inventory: bool,
 }
 #[derive(Clone)]
 struct Stored {
@@ -42,6 +44,8 @@ struct State {
     faults: BTreeMap<String, VecDeque<Fault>>,
     download_change: Option<(String, Vec<u8>)>,
     listing_change: Option<(usize, String, Vec<u8>)>,
+    listing_remove: Option<(usize, String)>,
+    listing_folder: Option<(usize, String, String)>,
     next_id: u64,
 }
 
@@ -55,6 +59,7 @@ impl FakeProvider {
         let root = item("root", "root", None, ItemKind::Folder, &[], 1, None);
         Self {
             page_size: page_size.max(1),
+            grouped_inventory: false,
             state: Arc::new(Mutex::new(State {
                 items: BTreeMap::from([(
                     "root".into(),
@@ -68,9 +73,41 @@ impl FakeProvider {
                 faults: BTreeMap::new(),
                 download_change: None,
                 listing_change: None,
+                listing_remove: None,
+                listing_folder: None,
                 next_id: 1,
             })),
         }
+    }
+    pub fn with_grouped_inventory(mut self) -> Self {
+        self.grouped_inventory = true;
+        self
+    }
+    fn inventory_selected(
+        &self,
+        page: Option<&str>,
+        selected: impl Fn(&RemoteItem) -> bool,
+    ) -> Result<Page<RemoteItem>> {
+        let state = self.state.lock().unwrap();
+        let offset = page
+            .unwrap_or("0")
+            .parse::<usize>()
+            .map_err(|_| Error::new(ErrorCode::InvalidConfig, "Invalid fixture page."))?;
+        let items: Vec<_> = state
+            .items
+            .values()
+            .filter(|stored| !stored.item.trashed && selected(&stored.item))
+            .map(|stored| stored.item.clone())
+            .collect();
+        let end = (offset + self.page_size).min(items.len());
+        Ok(Page {
+            next: (end < items.len()).then(|| end.to_string()),
+            items: items
+                .into_iter()
+                .skip(offset)
+                .take(self.page_size)
+                .collect(),
+        })
     }
     pub fn inject(&self, method: &str, fault: Fault) {
         self.state
@@ -86,6 +123,13 @@ impl FakeProvider {
     }
     pub fn change_after_listing_calls(&self, calls: usize, id: &str, bytes: Vec<u8>) {
         self.state.lock().unwrap().listing_change = Some((calls.max(1), id.into(), bytes));
+    }
+    pub fn remove_after_listing_calls(&self, calls: usize, id: &str) {
+        self.state.lock().unwrap().listing_remove = Some((calls.max(1), id.into()));
+    }
+    pub fn folder_after_listing_calls(&self, calls: usize, parent: &str, name: &str) {
+        self.state.lock().unwrap().listing_folder =
+            Some((calls.max(1), parent.into(), name.into()));
     }
     pub fn seed(&self, parent: &str, name: &str, bytes: &[u8], kind: ItemKind) -> String {
         let mut s = self.state.lock().unwrap();
@@ -126,12 +170,18 @@ impl FakeProvider {
         }
     }
     fn listed(&self) {
-        let change = {
+        let (change, remove, folder) = {
             let mut state = self.state.lock().unwrap();
             if let Some((remaining, _, _)) = &mut state.listing_change {
                 *remaining -= 1;
             }
-            if state
+            if let Some((remaining, _)) = &mut state.listing_remove {
+                *remaining -= 1;
+            }
+            if let Some((remaining, _, _)) = &mut state.listing_folder {
+                *remaining -= 1;
+            }
+            let change = if state
                 .listing_change
                 .as_ref()
                 .is_some_and(|(remaining, _, _)| *remaining == 0)
@@ -139,10 +189,44 @@ impl FakeProvider {
                 state.listing_change.take()
             } else {
                 None
-            }
+            };
+            let remove = if state
+                .listing_remove
+                .as_ref()
+                .is_some_and(|(remaining, _)| *remaining == 0)
+            {
+                state.listing_remove.take()
+            } else {
+                None
+            };
+            let folder = if state
+                .listing_folder
+                .as_ref()
+                .is_some_and(|(remaining, _, _)| *remaining == 0)
+            {
+                state.listing_folder.take()
+            } else {
+                None
+            };
+            (change, remove, folder)
         };
+        if let Some((_, id)) = remove {
+            let mut state = self.state.lock().unwrap();
+            let stored = state.items.get_mut(&id).unwrap();
+            stored.item.trashed = true;
+            bump(&mut stored.item);
+            state.changes.push(Change {
+                id,
+                removed: true,
+                item: None,
+            });
+        }
         if let Some((_, id, bytes)) = change {
             self.edit(&id, &bytes);
+        }
+        if let Some((_, parent, name)) = folder {
+            let id = self.seed(&parent, &name, b"", ItemKind::Folder);
+            self.seed(&id, "new.txt", b"new", ItemKind::File);
         }
     }
     fn before(&self, method: &str) -> Result<bool> {
@@ -162,6 +246,10 @@ impl FakeProvider {
             Some(Fault::CursorExpired) => Err(Error::new(
                 ErrorCode::IncompleteScan,
                 "Fixture change cursor expired.",
+            )),
+            Some(Fault::PageExpired) => Err(Error::new(
+                ErrorCode::InvalidConfig,
+                "Fixture listing page expired.",
             )),
             Some(Fault::Timeout) => Err(Error::new(ErrorCode::Transient, "Fixture timeout.")),
             Some(Fault::RateLimit) => {
@@ -258,6 +346,27 @@ fn check_version(actual: &RemoteItem, expected: &RemoteItem) -> Result<()> {
 
 #[async_trait]
 impl Provider for FakeProvider {
+    fn supports_grouped_inventory(&self) -> bool {
+        self.grouped_inventory
+    }
+    async fn inventory_folders(&self, page: Option<&str>) -> Result<Page<RemoteItem>> {
+        self.before("inventory_folders")?;
+        self.listed();
+        self.inventory_selected(page, |item| {
+            item.id != "root" && item.kind == ItemKind::Folder
+        })
+    }
+    async fn inventory_children(
+        &self,
+        parents: &[String],
+        page: Option<&str>,
+    ) -> Result<Page<RemoteItem>> {
+        self.before("inventory_children")?;
+        self.listed();
+        self.inventory_selected(page, |item| {
+            item.parents.iter().any(|id| parents.contains(id))
+        })
+    }
     async fn inventory_page(&self, page: Option<&str>) -> Result<Page<RemoteItem>> {
         self.before("inventory")?;
         self.listed();

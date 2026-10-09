@@ -690,6 +690,35 @@ impl Provider for GoogleDrive {
     async fn inventory_page(&self, page: Option<&str>) -> Result<Page<RemoteItem>> {
         self.list("trashed = false", page).await
     }
+    fn supports_grouped_inventory(&self) -> bool {
+        true
+    }
+    async fn inventory_folders(&self, page: Option<&str>) -> Result<Page<RemoteItem>> {
+        self.list(
+            "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+            page,
+        )
+        .await
+    }
+    async fn inventory_children(
+        &self,
+        parents: &[String],
+        page: Option<&str>,
+    ) -> Result<Page<RemoteItem>> {
+        if parents.is_empty() || parents.len() > 64 {
+            return Err(Error::new(
+                ErrorCode::InvalidConfig,
+                "Choose between one and 64 folders for an inventory group.",
+            ));
+        }
+        let membership = parents
+            .iter()
+            .map(|id| format!("'{}' in parents", escape(id)))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        self.list(&format!("({membership}) and trashed = false"), page)
+            .await
+    }
     async fn start_cursor(&self) -> Result<String> {
         let value: serde_json::Value = self
             .send(self.client.get(format!("{BASE}/changes/startPageToken")))

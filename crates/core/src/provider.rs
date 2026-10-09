@@ -57,6 +57,28 @@ pub trait Provider: Send + Sync {
             "This provider cannot inventory an account for adoption.",
         ))
     }
+    /// Supports a folder-only account census followed by parent-scoped groups.
+    /// Folder identity/class must not change when ordinary file metadata changes.
+    fn supports_grouped_inventory(&self) -> bool {
+        false
+    }
+    async fn inventory_folders(&self, _page: Option<&str>) -> Result<Page<RemoteItem>> {
+        Err(crate::Error::new(
+            crate::ErrorCode::Unsupported,
+            "This provider cannot inventory account folders separately.",
+        ))
+    }
+    /// The union of direct children of these exact opaque parent IDs.
+    async fn inventory_children(
+        &self,
+        _parents: &[String],
+        _page: Option<&str>,
+    ) -> Result<Page<RemoteItem>> {
+        Err(crate::Error::new(
+            crate::ErrorCode::Unsupported,
+            "This provider cannot inventory a group of folders.",
+        ))
+    }
     async fn start_cursor(&self) -> Result<String>;
     async fn changes(&self, cursor: &str) -> Result<Changes>;
     async fn download(&self, id: &str, offset: u64, max_bytes: usize) -> Result<Vec<u8>>;

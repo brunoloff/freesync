@@ -21,6 +21,218 @@ fn fixture() -> (tempfile::TempDir, Source, Manifest, FakeProvider) {
     (tmp, source, m, FakeProvider::new(1))
 }
 #[tokio::test]
+async fn grouped_inventory_merges_single_page_changes_and_resumes_saved_pages() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(20).with_grouped_inventory();
+    std::fs::write(source.local_root.join("same"), b"same").unwrap();
+    let id = provider.seed("root", "same", b"same", ItemKind::File);
+    provider.change_after_listing_calls(2, &id, b"new remote".to_vec());
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.progress.phase, "ready");
+    assert_eq!(report.progress.drive_passes, 1);
+    assert_eq!(report.progress.remote_folders_checked, 1);
+    assert_eq!(report.progress.remote_folders_total, 1);
+    assert_eq!(report.counts["unresolved"], 1);
+    assert_eq!(
+        std::fs::read(source.local_root.join("same")).unwrap(),
+        b"same"
+    );
+
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(1).with_grouped_inventory();
+    for name in ["one", "two", "three"] {
+        std::fs::write(source.local_root.join(name), name.as_bytes()).unwrap();
+        provider.seed("root", name, name.as_bytes(), ItemKind::File);
+    }
+    provider.inject("inventory_children", Fault::Pass);
+    provider.inject("inventory_children", Fault::Timeout);
+    assert_eq!(
+        manifest
+            .run(&provider, &CancellationToken::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Transient
+    );
+    let paused = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(paused.progress.remote_items, 2); // the root and first child
+    assert_eq!(paused.progress.remote_folders_checked, 0);
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.counts["matched"], 3);
+    assert_eq!(report.progress.drive_passes, 1);
+    assert_eq!(report.progress.remote_folders_checked, 1);
+    assert_eq!(report.progress.reused_hashes, 3);
+}
+#[tokio::test]
+async fn grouped_inventory_repeats_shifted_pages_without_losing_an_unchanged_child() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(1).with_grouped_inventory();
+    let mut first = String::new();
+    for name in ["one", "two", "three"] {
+        std::fs::write(source.local_root.join(name), name.as_bytes()).unwrap();
+        let id = provider.seed("root", name, name.as_bytes(), ItemKind::File);
+        if first.is_empty() {
+            first = id;
+        }
+    }
+    // The second child page shifts past 'two' when its predecessor is removed.
+    provider.remove_after_listing_calls(3, &first);
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.counts["matched"], 2);
+    assert_eq!(report.counts["unresolved"], 1);
+    assert!(!report.counts.contains_key("upload"));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.path == "two" && finding.status == "matched")
+    );
+    assert_eq!(report.progress.remote_folders_checked, 1);
+    assert_eq!(report.progress.drive_passes, 1); // the folder census was retained
+    assert_eq!(
+        std::fs::read(source.local_root.join("one")).unwrap(),
+        b"one"
+    );
+}
+#[tokio::test]
+async fn grouped_inventory_discovers_new_folders_after_its_census() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(20).with_grouped_inventory();
+    std::fs::create_dir(source.local_root.join("late")).unwrap();
+    provider.folder_after_listing_calls(2, "root", "late");
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.counts["matched"], 1);
+    assert_eq!(report.counts["download"], 1);
+    assert_eq!(report.progress.remote_folders_checked, 2);
+    assert_eq!(report.progress.remote_folders_total, 2);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.path == "late/new.txt" && finding.status == "download")
+    );
+    assert!(!source.local_root.join("late/new.txt").exists());
+}
+#[tokio::test]
+async fn grouped_inventory_retains_dirty_evidence_across_an_interrupted_change_feed() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(1).with_grouped_inventory();
+    let mut first = String::new();
+    for name in ["one", "two", "three"] {
+        std::fs::write(source.local_root.join(name), name.as_bytes()).unwrap();
+        let id = provider.seed("root", name, name.as_bytes(), ItemKind::File);
+        if first.is_empty() {
+            first = id;
+        }
+    }
+    let outside = provider.seed("outside", "unrelated", b"old", ItemKind::File);
+    provider.remove_after_listing_calls(3, &first);
+    provider.change_after_listing_calls(3, &outside, b"new".to_vec());
+    // Census, pre-group gap, first feed page; then interrupt before the
+    // unrelated second page. The consumed removal must still force a retry.
+    for _ in 0..3 {
+        provider.inject("changes", Fault::Pass);
+    }
+    provider.inject("changes", Fault::Timeout);
+    assert_eq!(
+        manifest
+            .run(&provider, &CancellationToken::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Transient
+    );
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.counts["matched"], 2);
+    assert_eq!(report.counts["unresolved"], 1);
+    assert!(!report.counts.contains_key("upload"));
+    assert_eq!(report.progress.drive_passes, 1);
+    assert_eq!(report.progress.reused_hashes, 3);
+}
+#[tokio::test]
+async fn grouped_inventory_preserves_completed_peers_when_one_concurrent_group_fails() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(1000).with_grouped_inventory();
+    for index in 0..130 {
+        let name = format!("folder-{index}");
+        std::fs::create_dir(source.local_root.join(&name)).unwrap();
+        std::fs::write(source.local_root.join(&name).join("same"), b"same").unwrap();
+        let folder = provider.seed("root", &name, b"", ItemKind::Folder);
+        provider.seed(&folder, "same", b"same", ItemKind::File);
+    }
+    provider.inject("inventory_children", Fault::Pass);
+    provider.inject("inventory_children", Fault::Timeout);
+    provider.inject("inventory_children", Fault::Pass);
+    assert_eq!(
+        manifest
+            .run(&provider, &CancellationToken::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Transient
+    );
+    // Exactly one unfinished group needs another request. Refetching either
+    // completed peer would encounter the second injected timeout.
+    provider.inject("inventory_children", Fault::Pass);
+    provider.inject("inventory_children", Fault::Timeout);
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 200).unwrap();
+    assert_eq!(report.counts["matched"], 260);
+    assert_eq!(report.progress.remote_folders_checked, 131);
+    assert_eq!(report.progress.remote_folders_total, 131);
+    assert_eq!(report.progress.drive_passes, 1);
+}
+#[tokio::test]
+async fn grouped_inventory_restarts_only_an_expired_child_page() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(1).with_grouped_inventory();
+    for name in ["one", "two", "three"] {
+        std::fs::write(source.local_root.join(name), name.as_bytes()).unwrap();
+        provider.seed("root", name, name.as_bytes(), ItemKind::File);
+    }
+    provider.inject("inventory_children", Fault::Pass);
+    provider.inject("inventory_children", Fault::PageExpired);
+    assert_eq!(
+        manifest
+            .run(&provider, &CancellationToken::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::IncompleteScan
+    );
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.counts["matched"], 3);
+    assert_eq!(report.progress.drive_passes, 1);
+    assert_eq!(report.progress.remote_folders_checked, 1);
+}
+#[tokio::test]
 async fn changing_exclusions_preserves_inventory_but_invalidates_review() {
     let (_t, mut source, manifest, provider) = fixture();
     std::fs::create_dir(source.local_root.join("scope")).unwrap();
