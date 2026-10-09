@@ -2,6 +2,7 @@
 mod backend;
 #[cfg(feature = "browser-test")]
 mod browser_test;
+mod desktop;
 use backend::{AppState, Preferences};
 use freesync_core::{Error, ErrorCode, Result, engine::EngineCommand};
 use serde_json::{Value, json};
@@ -16,7 +17,6 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 struct Shutdown(AtomicBool);
@@ -135,6 +135,12 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
         }
         "finish_login" => state.finish_login().await,
         "cancel_login" => state.cancel_login().await,
+        "resolve_conflict" => state.queue_conflict(
+            &text("pairId")?,
+            &text("path")?,
+            &text("conflictId")?,
+            serde_json::from_value(args["choice"].clone())?,
+        ),
         "keep_both" => {
             state.control("pause")?;
             state
@@ -153,7 +159,6 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
                 .await
         }
         "preferences" => {
-            let preferences: Preferences = serde_json::from_value(args.clone())?;
             if let Some(enabled) = args["autostart"].as_bool() {
                 if enabled {
                     app.autolaunch().enable()
@@ -162,17 +167,53 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
                 }
                 .map_err(|_| platform_error())?;
             }
-            state.database()?.set("preferences", &preferences)?;
+            if let Some(value) = args["notifications"].as_bool() {
+                state
+                    .database()?
+                    .patch("preferences", &json!({"notifications":value}))?;
+            }
             Ok(json!({"saved":true}))
         }
         "notify_test" => {
-            app.notification()
-                .builder()
-                .title("FreeSync")
-                .body("Notifications are working. Sync continues in the background.")
-                .show()
+            desktop::notify(
+                app,
+                "This is a FreeSync test notification. Sync continues in the background.",
+            )
+            .await
+        }
+        "zoom" => {
+            let level = args["level"]
+                .as_f64()
+                .filter(|v| v.is_finite() && (0.5..=2.0).contains(v))
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::InvalidConfig,
+                        "Choose a zoom level between 50% and 200%.",
+                    )
+                })?;
+            app.get_webview_window("main")
+                .ok_or_else(platform_error)?
+                .set_zoom(level)
                 .map_err(|_| platform_error())?;
-            Ok(json!({"sent":true}))
+            state
+                .database()?
+                .patch("preferences", &json!({"zoom":level}))?;
+            Ok(json!({"zoom":level}))
+        }
+        "open_recovery" => {
+            let directory = state.profile.join("recovery");
+            if std::fs::symlink_metadata(&directory).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(platform_error());
+            }
+            freesync_core::profile::private_directory(&directory)?;
+            let directory = directory.canonicalize()?;
+            if !directory.starts_with(state.profile.canonicalize()?) {
+                return Err(platform_error());
+            }
+            app.opener()
+                .open_path(directory.to_string_lossy(), None::<&str>)
+                .map_err(|_| platform_error())?;
+            Ok(json!({"opened":true}))
         }
         "pick_folder" => {
             let application = app.clone();
@@ -323,6 +364,14 @@ fn main() {
             }
         })
         .setup(|app| {
+            let preferences: Preferences = app
+                .state::<Arc<AppState>>()
+                .database()?
+                .get("preferences")?
+                .unwrap_or_default();
+            app.get_webview_window("main")
+                .ok_or_else(platform_error)?
+                .set_zoom(preferences.zoom.clamp(0.5, 2.0))?;
             let status =
                 MenuItem::with_id(app, "status", "FreeSync is starting", false, None::<&str>)?;
             let open = MenuItem::with_id(app, "show", "Open settings", true, None::<&str>)?;
@@ -366,6 +415,7 @@ fn main() {
                         shutdown(handle.clone());
                         break;
                     }
+                    let _ = desktop::open_comparisons(&state);
                     if let Ok(snapshot) = state.snapshot() {
                         let paused = snapshot["controls"]["paused"].as_bool().unwrap_or(false);
                         let conflicts = snapshot["conflicts"].as_array().map_or(0, Vec::len);
@@ -401,12 +451,11 @@ fn main() {
                             && attention != last_attention
                             && snapshot["preferences"]["notifications"] == true
                         {
-                            let _ = handle
-                                .notification()
-                                .builder()
-                                .title("FreeSync")
-                                .body("Sync needs attention. Open settings to review the details.")
-                                .show();
+                            let _ = desktop::notify(
+                                handle.clone(),
+                                "Sync needs attention. Open settings to review the details.",
+                            )
+                            .await;
                         }
                         last_attention = attention.into();
                     }

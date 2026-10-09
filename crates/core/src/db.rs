@@ -64,6 +64,103 @@ impl Database {
             [pair],
         )
     }
+    pub fn conflict_tasks(&self) -> Result<Vec<crate::ConflictTask>> {
+        self.all_json(
+            "SELECT json FROM state WHERE key LIKE 'conflict_task:%' ORDER BY rowid",
+            [],
+        )
+    }
+    pub fn save_conflict_task(&self, task: &crate::ConflictTask) -> Result<()> {
+        self.set(&format!("conflict_task:{}", task.id), task)
+    }
+    pub fn enqueue_conflict_task(&mut self, task: &crate::ConflictTask) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT id FROM conflicts WHERE pair=?1 AND path=?2",
+                params![task.conflict.pair_id, task.conflict.path],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current.as_deref() != Some(&task.conflict.id) {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "This comparison is out of date. Refresh the conflict before choosing a version.",
+            ));
+        }
+        let active: i64 = tx.query_row(
+            "SELECT count(*) FROM state WHERE key LIKE 'conflict_task:%' AND json_extract(json,'$.conflict.pair_id')=?1 AND json_extract(json,'$.conflict.path')=?2 AND json_extract(json,'$.state') NOT IN ('done','failed')",
+            params![task.conflict.pair_id, task.conflict.path], |r|r.get(0)
+        )?;
+        if active > 0 {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "An action is already working on this conflict. Other conflicts can still be reviewed.",
+            ));
+        }
+        tx.execute(
+            "INSERT INTO state VALUES(?1,?2)",
+            params![
+                format!("conflict_task:{}", task.id),
+                serde_json::to_string(task)?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn queue_conflict_operation(
+        &mut self,
+        conflict: &Conflict,
+        operation: &Operation,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "INSERT INTO operations VALUES(?1,?2,'prepared',?3)",
+            params![
+                operation.id,
+                operation.pair_id,
+                serde_json::to_string(operation)?
+            ],
+        )?;
+        tx.execute("DELETE FROM conflicts WHERE id=?1", [&conflict.id])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn replace_conflict(
+        &mut self,
+        original: &Conflict,
+        fresh: Option<&Conflict>,
+        matched: Option<&Baseline>,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        tx.execute("DELETE FROM conflicts WHERE id=?1", [&original.id])?;
+        if let Some(fresh) = fresh {
+            tx.execute(
+                "INSERT INTO conflicts VALUES(?1,?2,?3,?4)",
+                params![
+                    fresh.id,
+                    fresh.pair_id,
+                    fresh.path,
+                    serde_json::to_string(fresh)?
+                ],
+            )?;
+        }
+        if let Some(matched) = matched {
+            tx.execute("INSERT INTO baselines VALUES(?1,?2,?3) ON CONFLICT(pair,path) DO UPDATE SET json=excluded.json", params![original.pair_id, matched.path, serde_json::to_string(matched)?])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn operation(&self, id: &str) -> Result<Option<Operation>> {
+        let json: Option<String> = self
+            .connection
+            .query_row("SELECT json FROM operations WHERE id=?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        json.map(|v| serde_json::from_str(&v).map_err(Into::into))
+            .transpose()
+    }
     fn all_json<T: DeserializeOwned, P: rusqlite::Params>(
         &self,
         sql: &str,
@@ -91,6 +188,10 @@ impl Database {
     }
     pub fn controls(&self) -> Result<Controls> {
         Ok(self.get("controls")?.unwrap_or_default())
+    }
+    pub fn patch(&self, key: &str, value: &serde_json::Value) -> Result<()> {
+        self.connection.execute("INSERT INTO state VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET json=json_patch(state.json,excluded.json)", params![key,serde_json::to_string(value)?])?;
+        Ok(())
     }
     pub fn save_operation(&self, operation: &Operation) -> Result<()> {
         let state = serde_json::to_value(operation.state)?

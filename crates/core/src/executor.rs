@@ -654,6 +654,16 @@ pub async fn keep_both(
             "Pause sync before resolving this conflict.",
         ));
     }
+    keep_both_owned(db, pair, provider, path).await
+}
+
+/// The engine calls this only between cycles while holding the profile lock.
+pub(crate) async fn keep_both_owned(
+    db: &mut Database,
+    pair: &PairConfig,
+    provider: &dyn Provider,
+    path: &str,
+) -> Result<String> {
     healthy(pair, provider).await?;
     let conflict = db
         .conflicts(&pair.id)?

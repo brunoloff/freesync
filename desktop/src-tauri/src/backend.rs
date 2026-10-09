@@ -20,9 +20,23 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Preferences {
+    #[serde(default)]
     pub notifications: bool,
+    #[serde(default = "default_zoom")]
+    pub zoom: f64,
+}
+fn default_zoom() -> f64 {
+    1.0
+}
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            notifications: false,
+            zoom: 1.0,
+        }
+    }
 }
 pub struct AppState {
     pub profile: PathBuf,
@@ -144,15 +158,58 @@ impl AppState {
                 .count();
             pair_views.push(json!({"id":pair.id,"account":pair.account_email,"local_root":pair.local_root,"remote_id":pair.remote_root_id,"remote_name":pair.remote_root_name,"enabled":pair.enabled,"poll_secs":pair.poll_secs,"deletion_limit":pair.deletion_limit,"status":status,"deletion_hold":deletion_hold,"deletion_count":deletion_count}));
             for conflict in db.conflicts(&pair.id)? {
-                conflicts.push(json!({"pair_id":pair.id,"path":conflict.path,"reason":conflict.reason,"can_keep_both":conflict.local.as_ref().is_some_and(|l|l.kind==ItemKind::File) && conflict.remote.as_ref().is_some_and(|r|r.kind==ItemKind::File),"local_bytes":conflict.local.and_then(|l|l.fingerprint).map(|f|f.size),"remote_bytes":conflict.remote.and_then(|r|r.fingerprint).map(|f|f.size)}));
+                let ordinary = conflict
+                    .local
+                    .as_ref()
+                    .is_some_and(|l| l.kind == ItemKind::File)
+                    && conflict
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.kind == ItemKind::File);
+                conflicts.push(json!({"id":conflict.id,"pair_id":pair.id,"path":conflict.path,"reason":conflict.reason,"can_keep_both":ordinary,"can_use_local":ordinary && conflict.remote.as_ref().is_some_and(|r|r.can_edit && r.can_download),"can_use_drive":ordinary && conflict.remote.as_ref().is_some_and(|r|r.can_download),"local_bytes":conflict.local.and_then(|l|l.fingerprint).map(|f|f.size),"remote_bytes":conflict.remote.and_then(|r|r.fingerprint).map(|f|f.size)}));
             }
         }
         let account = db
             .get::<String>("selected_account")?
             .or_else(|| bootstrap_account().ok());
+        let mut recent_finished = 0;
+        let jobs:Vec<_>=db.conflict_tasks()?.into_iter().rev().filter(|t| {
+            if matches!(t.state.as_str(), "done" | "failed") { recent_finished += 1; recent_finished <= 100 } else { true }
+        }).map(|t|json!({"id":t.id,"conflict_id":t.conflict.id,"pair_id":t.conflict.pair_id,"path":t.conflict.path,"choice":t.choice,"state":t.state,"error":t.error})).collect();
         Ok(
-            json!({"account":account,"account_verified":db.get::<bool>("account_verified")?.unwrap_or(false),"pairs":pair_views,"conflicts":conflicts,"controls":db.controls()?,"preferences":db.get::<Preferences>("preferences")?.unwrap_or_default(),"engine_error":self.last_error.lock().map_err(|_|internal())?.clone(),"recovery_directory":self.profile.join("recovery")}),
+            json!({"account":account,"account_verified":db.get::<bool>("account_verified")?.unwrap_or_default(),"pairs":pair_views,"conflicts":conflicts,"conflict_jobs":jobs,"controls":db.controls()?,"preferences":db.get::<Preferences>("preferences")?.unwrap_or_default(),"engine_error":self.last_error.lock().map_err(|_|internal())?.clone(),"recovery_directory":self.profile.join("recovery")}),
         )
+    }
+    pub fn queue_conflict(
+        &self,
+        pair_id: &str,
+        path: &str,
+        conflict_id: &str,
+        choice: ConflictChoice,
+    ) -> Result<Value> {
+        let mut db = self.database()?;
+        let conflict = db
+            .conflicts(pair_id)?
+            .into_iter()
+            .find(|c| c.path == path && c.id == conflict_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::Conflict,
+                    "This conflict changed. Refresh the list before choosing a version.",
+                )
+            })?;
+        let task = ConflictTask {
+            id: uuid::Uuid::new_v4().to_string(),
+            conflict,
+            choice,
+            state: "queued".into(),
+            error: None,
+            operation_id: None,
+            preserved_path: None,
+            comparison_directory: None,
+        };
+        db.enqueue_conflict_task(&task)?;
+        Ok(json!({"accepted":true,"job_id":task.id}))
     }
     pub fn control(&self, action: &str) -> Result<Value> {
         let db = self.database()?;

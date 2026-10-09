@@ -172,6 +172,29 @@ pub struct Conflict {
     pub remote: Option<RemoteItem>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictChoice {
+    KeepBoth,
+    UseLocal,
+    UseDrive,
+    Compare,
+    Refresh,
+}
+
+/// Durable user instructions, processed by the sole sync owner between cycles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictTask {
+    pub id: String,
+    pub conflict: Conflict,
+    pub choice: ConflictChoice,
+    pub state: String,
+    pub error: Option<crate::Error>,
+    pub operation_id: Option<String>,
+    pub preserved_path: Option<String>,
+    pub comparison_directory: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Plan {
     pub operations: Vec<Operation>,

@@ -229,6 +229,7 @@ pub async fn run_controlled(
         }
         let controls = db.controls()?;
         let pairs = db.pairs()?;
+        crate::conflicts::process_tasks(db, profile, factory).await?;
         let enabled: BTreeSet<_> = pairs
             .iter()
             .filter(|p| p.enabled)

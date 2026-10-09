@@ -40,8 +40,8 @@ The lifecycle checks were repeated after the watcher correction: UI Quit exited 
 
 ## Design and rendered inspection
 
-The retained private primary and folder-dialog design references are
-1509 × 1042 and 1438 × 1093 respectively. They are not shipped UI
+The retained private design references are `design/folders-concept.png` at
+1509 × 1042 and `design/pair-concept.png` at 1438 × 1093. They are not shipped UI
 assets. The final browser screenshots were captured at those native dimensions.
 Both reference/render pairs were opened with `view_image` in the same QA passes.
 The ordinary browser viewport, a 620 × 520 minimum-window layout, and a 400 × 800
@@ -89,3 +89,13 @@ started with the saved test pair and no pending transfers. The last 1280 × 720
 browser capture showed Connected, the three retained test conflicts, verified
 native-renderer/IPC indicators and no horizontal overflow; warning/error logs
 were empty. Phases 1–7 are complete within the declared Linux test-pair scope.
+
+## Conflict and preference refinements — 9 October 2026
+
+The follow-up Linux checks exercised the actual native owner through the same UI dispatcher. Use local, Use Drive and Keep both were queued on different rows while another decision was preparing; navigation and the other rows remained usable. Each selected outcome was verified on disk and by a fresh Drive download. Displaced originals remained in recovery, Keep both's second name existed on both sides, the previous unrelated conflict remained unchanged, and the durable transfer queue returned to zero.
+
+Diff launched the installed KDiff3 process with labeled Local and Google Drive inputs. Both temporary files had the exact expected bytes and no write permission bits; synchronized originals stayed unchanged. A binary comparison showed a readable rejection and removed its temporary copies. Refresh comparison updated a conflict without choosing a side. An initial viewer-close check exposed KDiff3's normal status 1 for an unsaved comparison; the correction accepts that status and has a regression test. Other system viewers and operating systems remain unverified.
+
+Ctrl-wheel input changed the displayed/persisted zoom from 100% to 110%. The actual WebKit probe reported the corresponding native viewport geometry, and UI Quit/restart preserved 110%. Ctrl + 0 and the reset control restored 100%. Recovery's Open folder action launched the actual file manager with the private recovery path. Linux's notification service acknowledged the test; inhibition was reported in an earlier desktop read, and was no longer reported during the later test. Notification popup pixels were not observed.
+
+The 1280px and 620px conflict/preferences layouts were visually inspected; controls wrapped, and DOM geometry showed no horizontal overflow. Warning/error console logs were empty before Quit. Existing startup/notification settings were retained. Seven additional core tests and one desktop regression test bring the Rust total to 46. These focused checks do not constitute another three-hour soak or large-tree adoption validation.

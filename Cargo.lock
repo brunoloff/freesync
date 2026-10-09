@@ -1407,6 +1407,7 @@ dependencies = [
  "directories",
  "freesync-core",
  "freesync-google",
+ "notify-rust",
  "serde",
  "serde_json",
  "tauri",
@@ -1418,6 +1419,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "zbus",
 ]
 
 [[package]]

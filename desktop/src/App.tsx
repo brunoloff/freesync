@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeftRight, ArrowRight, Check, ChevronRight, Eye, Folder, LoaderCircle, Pause, Play, Plus, Power, RefreshCw, Settings, X, TriangleAlert } from 'lucide-react';
-import { message, native, rpc, type Conflict, type FolderPage, type Pair, type Preview, type Snapshot } from './api';
+import { ArrowLeftRight, ArrowRight, Check, ChevronRight, Eye, FileDiff, Folder, LoaderCircle, Minus, Pause, Play, Plus, Power, RefreshCw, Settings, X, TriangleAlert } from 'lucide-react';
+import { message, native, rpc, type Conflict, type ConflictChoice, type ConflictJob, type FolderPage, type Pair, type Preview, type Snapshot } from './api';
 import { invoke } from '@tauri-apps/api/core';
 type Page = 'Folders' | 'Conflicts' | 'Preferences';
 const compactPath = (path: string) => path.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/Users\/[^/]+\//, '~/');
@@ -47,11 +47,46 @@ export default function App() {
   const [login, setLogin] = useState(false);
   const [preview, setPreview] = useState<{ pairId: string; result: Preview; wasPaused: boolean }>();
   const [stopping, setStopping] = useState(false);
-  const reportedNativeView = useRef(false);
+  const [pendingConflicts, setPendingConflicts] = useState<Set<string>>(() => new Set());
+  const pendingConflictIds = useRef(new Set<string>());
+  const [conflictErrors, setConflictErrors] = useState<Record<string, string>>({});
+  const [zoom, setZoom] = useState(1);
+  const zoomLevel = useRef(1);
+  const zoomPending = useRef(false);
+  const zoomTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const reportedNativeView = useRef<number | undefined>(undefined);
+  const previousJobs = useRef<Record<string, string>>({});
   const refresh = useCallback(async () => { const value = await rpc<Snapshot>('snapshot'); setSnapshot(value); }, []);
+  const changeZoom = useCallback((level: number) => {
+    const next = Math.round(Math.min(2, Math.max(.5, level)) * 100) / 100;
+    zoomLevel.current = next; setZoom(next); zoomPending.current = true;
+    clearTimeout(zoomTimer.current);
+    zoomTimer.current = setTimeout(() => {
+      void rpc('zoom', { level: next }).catch(e => setError(message(e))).finally(() => { if (zoomLevel.current === next) zoomPending.current = false; });
+    }, 100);
+  }, []);
   useEffect(() => {
-    if (import.meta.env.VITE_FREESYNC_NATIVE_PROBE !== '1' || !native || !snapshot || reportedNativeView.current) return;
-    reportedNativeView.current = true;
+    const saved = snapshot?.preferences.zoom;
+    if (saved && !zoomPending.current) { zoomLevel.current = saved; setZoom(saved); }
+  }, [snapshot?.preferences.zoom]);
+  useEffect(() => {
+    if (!native) document.documentElement.style.zoom = String(zoom);
+  }, [zoom]);
+  useEffect(() => {
+    const wheel = (event: WheelEvent) => { if (event.ctrlKey && event.deltaY) { event.preventDefault(); changeZoom(zoomLevel.current + (event.deltaY < 0 ? .1 : -.1)); } };
+    const key = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && ['+', '=', '-', '0'].includes(event.key)) { event.preventDefault(); changeZoom(event.key === '0' ? 1 : zoomLevel.current + (event.key === '-' ? -.1 : .1)); } };
+    document.addEventListener('wheel', wheel, { passive: false, capture: true }); document.addEventListener('keydown', key);
+    return () => { clearTimeout(zoomTimer.current); document.removeEventListener('wheel', wheel, true); document.removeEventListener('keydown', key); };
+  }, [changeZoom]);
+  useEffect(() => {
+    for (const job of snapshot?.conflict_jobs ?? []) {
+      if (job.state === 'done' && previousJobs.current[job.id] && previousJobs.current[job.id] !== 'done') setNotice(job.choice === 'compare' ? 'The text comparison opened in your system diff app. Its temporary copies are read-only.' : job.choice === 'refresh' ? 'Fresh comparison complete.' : 'Conflict resolved. The displaced version remains preserved.');
+      previousJobs.current[job.id] = job.state;
+    }
+  }, [snapshot?.conflict_jobs]);
+  useEffect(() => {
+    if (import.meta.env.VITE_FREESYNC_NATIVE_PROBE !== '1' || !native || !snapshot || reportedNativeView.current === snapshot.preferences.zoom) return;
+    reportedNativeView.current = snapshot.preferences.zoom;
     const heading = document.querySelector('main h1');
     void invoke('native_ui_probe', { report: {
       mounted: !!document.querySelector('.app-shell') && heading?.textContent === 'Folders',
@@ -96,11 +131,15 @@ export default function App() {
     const previous = preview; setPreview(undefined);
     if (previous && !previous.wasPaused && snapshot?.pairs.find(p => p.id === previous.pairId)?.enabled) control('resume');
   };
-  const keepBoth = async (conflict: Conflict) => {
-    const wasPaused = paused;
-    await action('keep_both', { pairId: conflict.pair_id, path: conflict.path });
-    if (!wasPaused) await action('control', { action: 'resume' });
-    setNotice('Both versions are preserved. The local copy has a conflict name; the Drive version keeps the original name.');
+  const resolve = async (conflict: Conflict, choice: ConflictChoice) => {
+    if (pendingConflictIds.current.has(conflict.id)) return;
+    pendingConflictIds.current.add(conflict.id); setPendingConflicts(new Set(pendingConflictIds.current));
+    setConflictErrors(previous => ({ ...previous, [conflict.id]: '' }));
+    try {
+      await rpc('resolve_conflict', { pairId: conflict.pair_id, path: conflict.path, conflictId: conflict.id, choice });
+      setNotice('Action queued in the background. You can review other conflicts.'); await refresh();
+    } catch (e) { setConflictErrors(previous => ({ ...previous, [conflict.id]: message(e) })); }
+    finally { pendingConflictIds.current.delete(conflict.id); setPendingConflicts(new Set(pendingConflictIds.current)); }
   };
   const good = !!pair?.enabled && !paused && !pair.status.error && !pair.status.conflicts && !pair.deletion_hold;
   const footer = stopping ? 'Saving progress and stopping…' : paused ? 'Sync is paused' : snapshot?.pairs.some(p => p.enabled) ? 'Sync is running' : 'Choose a folder to start syncing';
@@ -121,12 +160,41 @@ export default function App() {
           {pair.deletion_hold && <div className="banner error"><TriangleAlert /><span>{pair.deletion_count} deletions are paused for review. Review their paths in the preview before continuing.</span><button disabled={busy} onClick={() => { void prepare(pair.id).catch(() => {}); }}>Review</button></div>}
           <div className="detail-actions"><button disabled={busy} onClick={() => { void prepare(pair.id).catch(() => {}); }}>Preview changes{busy && <LoaderCircle className="spin" />}</button><button className="text-button" disabled={busy} onClick={() => setPairDialog(true)}>Folder settings</button></div><p className="muted recovery-note">Deleted files are kept in recovery.</p>
         </section> : <div className="empty"><Folder /><h3>No folders yet</h3><p>Add the test-freesync folder to preview its changes.</p><button className="primary" onClick={() => setPairDialog(true)}>Add folder</button></div>}
-      </> : page === 'Conflicts' ? <section className="conflict-list">{snapshot.conflicts.length ? snapshot.conflicts.map(c => <article key={`${c.pair_id}/${c.path}`} className="conflict-row"><ArrowLeftRight /><div><h2>{c.path}</h2><p>{c.reason}</p><p className="muted">Local: {bytes(c.local_bytes)} · Google Drive: {bytes(c.remote_bytes)}</p>{!c.can_keep_both && <p className="muted">This item needs a fresh comparison or a folder rename. Its contents remain preserved.</p>}</div><button disabled={busy || !c.can_keep_both} onClick={() => { void keepBoth(c).catch(() => {}); }}>Keep both</button></article>) : <div className="empty"><Check /><h3>No conflicts</h3><p>Your folder pairs have no unresolved conflicts.</p></div>}</section> : <section className="preferences"><div className="preference-row"><div><h2>Google account</h2><p>{snapshot.account ?? 'Connect an account to browse Drive.'}</p></div><button disabled={busy} onClick={() => setLogin(true)}>{snapshot.account ? 'Reconnect' : 'Connect Google account'}</button></div><div className="preference-row"><div><h2>Start FreeSync at login</h2><p>Keep syncing in the tray when you sign in to this computer.</p></div><input aria-label="Start FreeSync at login" type="checkbox" className="switch" checked={snapshot.autostart} disabled={busy} onChange={e => { void action('preferences', { ...snapshot.preferences, autostart: e.target.checked }).catch(() => {}); }} /></div><div className="preference-row"><div><h2>Notifications</h2><p>Notify you when sync needs attention.</p></div><input aria-label="Notifications" type="checkbox" className="switch" checked={snapshot.preferences.notifications} disabled={busy} onChange={e => { void action('preferences', { notifications: e.target.checked }).catch(() => {}); }} /></div>{snapshot.preferences.notifications && <button onClick={() => { void action('notify_test').then(() => setNotice('A test notification was sent.')).catch(() => {}); }}>Test notification</button>}<div className="preference-row"><div><h2>Recovery files</h2><p className="path-value">{compactPath(snapshot.recovery_directory)}</p><p>Deleted and replaced local files remain here until you remove them yourself.</p></div></div><div className="preference-row"><div><h2>Desktop OAuth client</h2><p>Use a Desktop client from your Google Cloud project.</p></div><button disabled={busy} onClick={() => { void action('import_client').then(value => { if ((value as { imported?: boolean }).imported) setNotice('Desktop client imported. You can connect your account.'); }).catch(() => {}); }}>Import client JSON</button></div></section>}
+      </> : page === 'Conflicts' ? <section className="conflict-list">
+        {snapshot.conflicts.length ? snapshot.conflicts.map(c => <ConflictRow key={c.id} conflict={c} job={snapshot.conflict_jobs.find(j => j.conflict_id === c.id)} pending={pendingConflicts.has(c.id)} error={conflictErrors[c.id]} onAction={choice => { void resolve(c, choice); }} />) : <div className="empty"><Check /><h3>No conflicts</h3><p>Your folder pairs have no unresolved conflicts.</p></div>}
+        {snapshot.conflict_jobs.some(j => !['done', 'failed'].includes(j.state)) && <section className="background-actions" aria-label="Background conflict actions"><h2>Background actions</h2>{snapshot.conflict_jobs.filter(j => !['done', 'failed'].includes(j.state)).map(j => <div key={j.id} role="status"><LoaderCircle className="spin" /><div><strong>{j.path}</strong><span>{j.state === 'syncing' && paused ? 'Waiting for sync to resume' : jobLabel(j)}</span></div></div>)}</section>}
+      </section> : <section className="preferences">
+        <div className="preference-row"><div><h2>Google account</h2><p>{snapshot.account ?? 'Connect an account to browse Drive.'}</p></div><button disabled={busy} onClick={() => setLogin(true)}>{snapshot.account ? 'Reconnect' : 'Connect Google account'}</button></div>
+        <div className="preference-row"><div><h2>Start FreeSync at login</h2><p>Keep syncing in the tray when you sign in to this computer.</p></div><input aria-label="Start FreeSync at login" type="checkbox" className="switch" checked={snapshot.autostart} disabled={busy} onChange={e => { void action('preferences', { ...snapshot.preferences, autostart: e.target.checked }).catch(() => {}); }} /></div>
+        <div className="preference-row"><div><h2>Notifications</h2><p>Notify you when sync needs attention.</p><button className="text-button" disabled={busy} onClick={() => { void action('notify_test').then(result => { const delivery = result as { inhibited?: boolean; accepted?: boolean }; setNotice(delivery.inhibited ? 'Your desktop is currently suppressing notifications (Do Not Disturb or presentation mode). The test was accepted, but its popup may be hidden.' : delivery.accepted ? 'Your desktop accepted the test notification. If its popup is hidden, check the system notification settings.' : 'Test notification requested. Check the system notification settings if no popup appears.'); }).catch(() => {}); }}>Test notification</button></div><input aria-label="Notifications" type="checkbox" className="switch" checked={snapshot.preferences.notifications} disabled={busy} onChange={e => { void action('preferences', { notifications: e.target.checked }).catch(() => {}); }} /></div>
+        <div className="preference-row"><div><h2>Interface zoom</h2><p>Ctrl + scroll zooms the entire interface. Ctrl + 0 resets it.</p></div><div className="zoom-controls"><button aria-label="Zoom out" disabled={zoom <= .5} onClick={() => changeZoom(zoom - .1)}><Minus /></button><button aria-label="Reset zoom" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button><button aria-label="Zoom in" disabled={zoom >= 2} onClick={() => changeZoom(zoom + .1)}><Plus /></button></div></div>
+        <div className="preference-row"><div><h2>Recovery files</h2><p className="path-value">{compactPath(snapshot.recovery_directory)}</p><p>Deleted and replaced files remain here until you remove them yourself.</p></div><button disabled={busy} onClick={() => { void action('open_recovery').then(() => setNotice('Recovery folder opened in your file manager.')).catch(() => {}); }}><Folder />Open folder</button></div>
+        <div className="preference-row"><div><h2>Desktop OAuth client</h2><p>Use a Desktop client from your Google Cloud project.</p></div><button disabled={busy} onClick={() => { void action('import_client').then(value => { if ((value as { imported?: boolean }).imported) setNotice('Desktop client imported. You can connect your account.'); }).catch(() => {}); }}>Import client JSON</button></div>
+      </section>}
     </main><footer className="status-footer"><span><StatusMark good={good} />{footer}</span><span>Folder settings are saved automatically</span></footer></div>
     {pairDialog && <PairDialog pair={pair} snapshot={snapshot} onClose={() => setPairDialog(false)} onReconnect={() => setLogin(true)} onSubmit={async (values) => { await action('configure', values); setPairDialog(false); await prepare('test-freesync'); }} />}
     {preview && <Modal title="Preview changes" description="Sync is paused while you review this plan." onClose={closePreview} footer={<><button disabled={busy} onClick={closePreview}>Cancel</button>{pair?.deletion_hold && <button disabled={busy} onClick={() => { void action('approve_deletions', { pairId: preview.pairId, count: pair.deletion_count }).catch(() => {}); }}>Approve {pair.deletion_count} deletions</button>}<button className="primary" disabled={busy || pair?.deletion_hold} onClick={() => { void action('activate', { pairId: preview.pairId }).then(() => { setPreview(undefined); setNotice('Sync is active for the selected folder pair.'); }).catch(() => {}); }}>{snapshot?.pairs.find(p => p.id === preview.pairId)?.enabled ? 'Resume sync' : 'Activate sync'}<ArrowRight /></button></>}><div className="preview-counts"><span><strong>{preview.result.counts.operations}</strong> changes</span><span><strong>{preview.result.counts.conflicts}</strong> conflicts</span><span><strong>{preview.result.counts.skipped}</strong> skipped</span></div><div className="preview-items">{preview.result.operations.map((o, i) => <div key={i}><strong>{o.path}</strong><span>{o.reason}</span></div>)}{preview.result.conflicts.map(c => <div key={c.path}><strong>{c.path}</strong><span>{c.reason}</span></div>)}{preview.result.skipped.map(s => <div key={s.path}><strong>{s.path}</strong><span>{s.reason}</span></div>)}{!preview.result.counts.operations && !preview.result.counts.conflicts && <p>No pending changes. Matching content is already in sync.</p>}</div><p className="muted">Uploads and downloads stay within the selected test folder. Deletions use Drive Trash or local recovery.</p></Modal>}
     {login && <LoginDialog account={snapshot?.account ?? ''} onClose={() => setLogin(false)} onSuccess={() => { setLogin(false); setError(''); setNotice('Google account connected.'); void refresh(); }} />}
   </div>;
+}
+function jobLabel(job: ConflictJob): string {
+  return job.state === 'queued' ? 'Queued…' : job.state === 'ready_to_open' ? 'Opening diff app…' : job.state === 'syncing' ? 'Syncing the chosen versions…' : job.choice === 'compare' ? 'Preparing text comparison…' : 'Working…';
+}
+function ConflictRow({ conflict: c, job, pending, error, onAction }: { conflict: Conflict; job?: ConflictJob; pending: boolean; error?: string; onAction: (choice: ConflictChoice) => void }) {
+  const working = pending || !!job && !['done', 'failed'].includes(job.state);
+  return <article className="conflict-row" aria-label={`Conflict ${c.path}`}>
+    <ArrowLeftRight /><div><h2>{c.path}</h2><p>{c.reason}</p><p className="muted">Local: {bytes(c.local_bytes)} · Google Drive: {bytes(c.remote_bytes)}</p>
+      {working && <p role="status" className="conflict-progress"><LoaderCircle className="spin" />{job ? jobLabel(job) : 'Queuing…'}</p>}
+      {(error || job?.error) && <p role="alert" className="inline-error">{error || job?.error?.message}</p>}
+      {!c.can_keep_both && <p className="muted">Refresh missing, moved or ambiguous items before choosing a file version.</p>}
+    </div><div className="conflict-controls">
+      <button disabled={working || !c.can_keep_both} onClick={() => onAction('keep_both')}>Keep both</button>
+      <button disabled={working || !c.can_use_local} title="Keep local content at the original name; retain the Drive original in recovery." onClick={() => onAction('use_local')}>Use local</button>
+      <button disabled={working || !c.can_use_drive} title="Keep Drive content at the original name; retain the local original in recovery." onClick={() => onAction('use_drive')}>Use Drive</button>
+      <button disabled={working || !c.can_use_drive} title="Open read-only temporary text copies in your system diff app." onClick={() => onAction('compare')}><FileDiff />Diff</button>
+      <button className="text-button" disabled={working} onClick={() => onAction('refresh')}><RefreshCw />Refresh comparison</button>
+    </div>
+  </article>;
 }
 function PairDialog({ pair, snapshot, onClose, onReconnect, onSubmit }: { pair?: Pair; snapshot?: Snapshot; onClose: () => void; onReconnect: () => void; onSubmit: (values: Record<string, unknown>) => Promise<void> }) {
   const [path, setPath] = useState(pair ? compactPath(pair.local_root) : '');
