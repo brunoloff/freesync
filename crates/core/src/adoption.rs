@@ -312,7 +312,10 @@ impl Manifest {
             return self.mark_remote_unavailable(&item.id);
         }
         if item.kind == ItemKind::Folder
-            && self.get::<String>("inventory_strategy")?.as_deref() == Some("parent_groups_v1")
+            && matches!(
+                self.get::<String>("inventory_strategy")?.as_deref(),
+                Some("parent_groups_v1" | "parent_groups_v2")
+            )
         {
             self.db.execute("INSERT OR IGNORE INTO inventory_folder_candidates SELECT ?1 WHERE NOT EXISTS(SELECT 1 FROM inventory_parents WHERE id=?1)", [&item.id])?;
         }
@@ -370,7 +373,10 @@ impl Manifest {
         if provider.supports_grouped_inventory() {
             return self.grouped_remote_scan(provider, p, cancel).await;
         }
-        if self.get::<String>("inventory_strategy")?.as_deref() == Some("parent_groups_v1") {
+        if matches!(
+            self.get::<String>("inventory_strategy")?.as_deref(),
+            Some("parent_groups_v1" | "parent_groups_v2")
+        ) {
             self.invalidate_remote()?;
             self.set("inventory_strategy", &"whole_account_v1")?;
         }

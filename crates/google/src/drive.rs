@@ -7,6 +7,36 @@ use std::{collections::BTreeMap, sync::Arc};
 const BASE: &str = "https://www.googleapis.com/drive/v3";
 pub const FILE_FIELDS: &str = "id,name,parents,mimeType,md5Checksum,size,version,modifiedTime,trashed,capabilities(canDownload,canEdit,canAddChildren),appProperties";
 
+/// Metadata reads can be retried without creating an uncertain write outcome.
+/// Keep waits bounded and honor Retry-After without shortening server requests.
+async fn retry_metadata<T, F, Fut>(mut read: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    for attempt in 0..5 {
+        match read().await {
+            Err(error)
+                if attempt < 4
+                    && matches!(error.code, ErrorCode::Transient | ErrorCode::RateLimited)
+                    && error.retry_after_secs.unwrap_or(0) <= 60 =>
+            {
+                let jitter = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64
+                    % 1000;
+                let delay = std::time::Duration::from_millis((1 << attempt) * 1000 + jitter).max(
+                    std::time::Duration::from_secs(error.retry_after_secs.unwrap_or_default()),
+                );
+                tokio::time::sleep(delay).await;
+            }
+            outcome => return outcome,
+        }
+    }
+    unreachable!("the last attempt returns its outcome")
+}
+
 pub struct GoogleDrive {
     pub auth: Arc<Auth>,
     client: reqwest::Client,
@@ -294,6 +324,23 @@ impl GoogleDrive {
         }
         check_response(response).await
     }
+    async fn send_read(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let invalid = || {
+            Error::new(
+                ErrorCode::InvalidConfig,
+                "Metadata retry requires a cloneable GET request.",
+            )
+        };
+        let check = request
+            .try_clone()
+            .ok_or_else(invalid)?
+            .build()
+            .map_err(|_| invalid())?;
+        if check.method() != reqwest::Method::GET {
+            return Err(invalid());
+        }
+        retry_metadata(|| async { self.send(request.try_clone().ok_or_else(invalid)?).await }).await
+    }
     async fn list(&self, query: &str, page: Option<&str>) -> Result<Page<RemoteItem>> {
         let mut request = self.client.get(format!("{BASE}/files")).query(&[
             ("q", query),
@@ -309,7 +356,7 @@ impl GoogleDrive {
             request = request.query(&[("pageToken", page)]);
         }
         let result: FileList = self
-            .send(request)
+            .send_read(request)
             .await?
             .json()
             .await
@@ -407,7 +454,7 @@ impl GoogleDrive {
     /// Version matching prevents combining a stale v3 snapshot with a newer tag.
     async fn concurrency_tag(&self, item: &RemoteItem) -> Result<String> {
         let response = self
-            .send(
+            .send_read(
                 self.client
                     .get(format!(
                         "https://www.googleapis.com/drive/v2/files/{}",
@@ -622,7 +669,7 @@ impl Provider for GoogleDrive {
     }
     async fn identity(&self) -> Result<Account> {
         let response = self
-            .send(
+            .send_read(
                 self.client
                     .get(format!("{BASE}/about"))
                     .query(&[("fields", "user(emailAddress,displayName,permissionId)")]),
@@ -647,7 +694,7 @@ impl Provider for GoogleDrive {
     async fn get(&self, id: &str) -> Result<RemoteItem> {
         for attempt in 0..5 {
             let response = self
-                .send(
+                .send_read(
                     self.client
                         .get(format!("{BASE}/files/{id}"))
                         .query(&[("fields", FILE_FIELDS)]),
@@ -721,7 +768,7 @@ impl Provider for GoogleDrive {
     }
     async fn start_cursor(&self) -> Result<String> {
         let value: serde_json::Value = self
-            .send(self.client.get(format!("{BASE}/changes/startPageToken")))
+            .send_read(self.client.get(format!("{BASE}/changes/startPageToken")))
             .await?
             .json()
             .await
@@ -756,7 +803,7 @@ impl Provider for GoogleDrive {
         let fields =
             format!("nextPageToken,newStartPageToken,changes(fileId,removed,file({FILE_FIELDS}))");
         let response: ChangePage = self
-            .send(self.client.get(format!("{BASE}/changes")).query(&[
+            .send_read(self.client.get(format!("{BASE}/changes")).query(&[
                 ("pageToken", cursor),
                 ("fields", &fields),
                 ("pageSize", &self.page_size.to_string()),
@@ -1045,5 +1092,110 @@ impl Provider for GoogleDrive {
         )
         .await?;
         self.get(&actual.id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+
+    #[tokio::test(start_paused = true)]
+    async fn metadata_retries_recover_and_respect_server_delay() {
+        let start = tokio::time::Instant::now();
+        let mut calls = 0;
+        let result = retry_metadata(|| {
+            calls += 1;
+            let attempt = calls;
+            async move {
+                match attempt {
+                    1 => Err(Error::new(ErrorCode::Transient, "Fixture service error")),
+                    2 => {
+                        let mut error = Error::new(ErrorCode::RateLimited, "Fixture rate limit");
+                        error.retry_after_secs = Some(10);
+                        Err(error)
+                    }
+                    _ => Ok("saved page"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, "saved page");
+        assert_eq!(calls, 3);
+        assert!(start.elapsed() >= Duration::from_secs(11));
+        assert!(start.elapsed() < Duration::from_secs(12));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn metadata_retries_are_bounded_and_keep_the_final_error() {
+        let start = tokio::time::Instant::now();
+        let mut calls = 0;
+        let error = retry_metadata::<(), _, _>(|| {
+            calls += 1;
+            std::future::ready(Err(Error::new(
+                ErrorCode::Transient,
+                "Fixture still offline",
+            )))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(calls, 5);
+        assert_eq!(error.message, "Fixture still offline");
+        assert!(start.elapsed() >= Duration::from_secs(15));
+        assert!(start.elapsed() < Duration::from_secs(19));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn metadata_retries_preserve_nonretryable_errors_and_long_server_waits() {
+        for code in [
+            ErrorCode::Authentication,
+            ErrorCode::Permission,
+            ErrorCode::InvalidConfig,
+            ErrorCode::NotFound,
+            ErrorCode::IncompleteScan,
+            ErrorCode::AmbiguousOutcome,
+            ErrorCode::Conflict,
+            ErrorCode::UnsafePath,
+            ErrorCode::RateLimited,
+        ] {
+            let mut calls = 0;
+            let start = tokio::time::Instant::now();
+            let error = retry_metadata::<(), _, _>(|| {
+                calls += 1;
+                let mut error = Error::new(code, "Fixture stop");
+                if code == ErrorCode::RateLimited {
+                    error.retry_after_secs = Some(120);
+                }
+                std::future::ready(Err(error))
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(calls, 1);
+            assert_eq!(start.elapsed(), Duration::ZERO);
+            assert_eq!(error.code, code);
+            assert_eq!(
+                error.retry_after_secs,
+                (code == ErrorCode::RateLimited).then_some(120)
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelling_a_metadata_wait_does_not_leave_a_retry_running() {
+        let calls = AtomicUsize::new(0);
+        let read = retry_metadata::<(), _, _>(|| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            std::future::ready(Err(Error::new(ErrorCode::Transient, "Fixture offline")))
+        });
+        tokio::select! {
+            result = read => panic!("retry ended before cancellation: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }

@@ -46,6 +46,7 @@ struct State {
     listing_change: Option<(usize, String, Vec<u8>)>,
     listing_remove: Option<(usize, String)>,
     listing_folder: Option<(usize, String, String)>,
+    listing_move: Option<(usize, String, String)>,
     next_id: u64,
 }
 
@@ -75,6 +76,7 @@ impl FakeProvider {
                 listing_change: None,
                 listing_remove: None,
                 listing_folder: None,
+                listing_move: None,
                 next_id: 1,
             })),
         }
@@ -131,6 +133,9 @@ impl FakeProvider {
         self.state.lock().unwrap().listing_folder =
             Some((calls.max(1), parent.into(), name.into()));
     }
+    pub fn move_after_listing_calls(&self, calls: usize, id: &str, parent: &str) {
+        self.state.lock().unwrap().listing_move = Some((calls.max(1), id.into(), parent.into()));
+    }
     pub fn seed(&self, parent: &str, name: &str, bytes: &[u8], kind: ItemKind) -> String {
         let mut s = self.state.lock().unwrap();
         let id = format!("fake-{}", s.next_id);
@@ -170,6 +175,33 @@ impl FakeProvider {
         }
     }
     fn listed(&self) {
+        let movement = {
+            let mut state = self.state.lock().unwrap();
+            if let Some((remaining, _, _)) = &mut state.listing_move {
+                *remaining -= 1;
+            }
+            if state
+                .listing_move
+                .as_ref()
+                .is_some_and(|(remaining, _, _)| *remaining == 0)
+            {
+                state.listing_move.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, id, parent)) = movement {
+            let mut state = self.state.lock().unwrap();
+            let stored = state.items.get_mut(&id).unwrap();
+            stored.item.parents = vec![parent];
+            bump(&mut stored.item);
+            let updated = stored.item.clone();
+            state.changes.push(Change {
+                id,
+                removed: false,
+                item: Some(updated),
+            });
+        }
         let (change, remove, folder) = {
             let mut state = self.state.lock().unwrap();
             if let Some((remaining, _, _)) = &mut state.listing_change {

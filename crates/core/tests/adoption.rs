@@ -206,6 +206,88 @@ async fn grouped_inventory_preserves_completed_peers_when_one_concurrent_group_f
     assert_eq!(report.progress.drive_passes, 1);
 }
 #[tokio::test]
+async fn grouped_inventory_rechecks_a_move_seen_by_another_concurrent_group() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(64).with_grouped_inventory();
+    let mut folders = Vec::new();
+    for index in 0..130 {
+        let name = format!("folder-{index:03}");
+        std::fs::create_dir(source.local_root.join(&name)).unwrap();
+        let id = provider.seed("root", &name, b"", ItemKind::Folder);
+        folders.push((id, name));
+    }
+    folders.sort();
+    let (old_parent, old_name) = &folders[0];
+    let (new_parent, _) = &folders[64];
+    let mut moved = String::new();
+    for index in 0..71 {
+        let name = format!("item-{index:03}.txt");
+        std::fs::write(
+            source.local_root.join(old_name).join(&name),
+            name.as_bytes(),
+        )
+        .unwrap();
+        let id = provider.seed(old_parent, &name, name.as_bytes(), ItemKind::File);
+        if index == 0 {
+            moved = id;
+        }
+    }
+    // Three census pages precede the first cohort. After the old parent's
+    // first page, a peer sees the moved child in its new location. The second
+    // old-parent page now skips unchanged item-064 due to its shifted offset.
+    provider.move_after_listing_calls(5, &moved, new_parent);
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "item-064.txt", 0, 100).unwrap();
+    assert_eq!(report.matching, 1);
+    assert_eq!(report.findings[0].status, "matched");
+    assert_eq!(report.counts["matched"], 200);
+    assert_eq!(report.counts["upload"], 1);
+    assert_eq!(report.counts["download"], 1);
+    assert_eq!(report.progress.drive_passes, 1);
+    assert_eq!(report.progress.remote_folders_checked, 131);
+}
+
+#[tokio::test]
+async fn grouped_inventory_upgrades_old_multi_page_checks_without_repeating_the_census() {
+    let (_temp, source, manifest, _) = fixture();
+    let provider = FakeProvider::new(1).with_grouped_inventory();
+    for name in ["one", "two", "three"] {
+        std::fs::write(source.local_root.join(name), name.as_bytes()).unwrap();
+        provider.seed("root", name, name.as_bytes(), ItemKind::File);
+    }
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    manifest
+        .set("inventory_strategy", &"parent_groups_v1")
+        .unwrap();
+    provider.inject("inventory_children", Fault::Timeout);
+    assert_eq!(
+        manifest
+            .run(&provider, &CancellationToken::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Transient
+    );
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.progress.drive_passes, 1);
+    assert_eq!(report.progress.remote_folders_checked, 0);
+    manifest
+        .run(&provider, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    assert_eq!(report.counts["matched"], 3);
+    assert_eq!(report.progress.drive_passes, 1);
+    assert_eq!(report.progress.remote_folders_checked, 1);
+}
+
+#[tokio::test]
 async fn grouped_inventory_restarts_only_an_expired_child_page() {
     let (_temp, source, manifest, _) = fixture();
     let provider = FakeProvider::new(1).with_grouped_inventory();

@@ -141,4 +141,9 @@ Checked 2026-10-09 against the native Linux app and its private browser bridge. 
 
 | Grouped inventory recovery | Six provider-backed integration tests cover change merges, shifted pagination, late folders, interrupted change feeds, completed peers surviving a failed group and expired child pages. A Unix local-root regression rejects a new top-level entry before matching and reuses the original checksum on resume. All 71 Rust tests and Clippy checks pass. The real desktop restarted with this build and GUI Resume began local verification; no browser warnings or errors appeared. |
 
+| Live grouped checkpoint | The folder census finished with 168,166 parents. The rendered counter showed verified folders advancing, and a native restart retained 7,424 verified folders plus 205,242 Drive items. GUI Resume restarted local verification with the saved group counts. |
+| Metadata read backoff | Four clock-controlled tests verify transient/rate-limit recovery, server delays, bounded attempts, permanent-error preservation and cancellation without a detached retry. The complete suite has 75 passing tests; Clippy remains warning-free. |
+
+| Cross-group moves | A concurrent peer listing saw a moved file at its new parent and masked its old parent before the feed was read. An isolated reproduction with the old rule falsely proposed uploading an unchanged skipped child. The conservative cohort rule passed; a checkpoint-upgrade regression retained the census while rechecking old multi-page groups. All 77 Rust tests and Clippy checks pass. |
+
 Full real-report counts and final runtime evidence are still pending; these fixture checks do not establish Phase 10 full-tree performance acceptance.

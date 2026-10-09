@@ -19,13 +19,6 @@ impl Delta {
                 .is_some_and(|item| item.kind == ItemKind::Folder)
             || self.removed && self.before.is_none()
     }
-    fn affects(&self, parents: &[String]) -> bool {
-        self.removed && self.before.is_none()
-            || [&self.before, &self.after].into_iter().any(|item| {
-                item.as_ref()
-                    .is_some_and(|item| item.parents.iter().any(|id| parents.contains(id)))
-            })
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -253,9 +246,37 @@ impl Manifest {
         progress: &mut Progress,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        if self.get::<String>("inventory_strategy")?.as_deref() != Some("parent_groups_v1") {
-            self.invalidate_remote()?;
-            self.set("inventory_strategy", &"parent_groups_v1")?;
+        match self.get::<String>("inventory_strategy")?.as_deref() {
+            Some("parent_groups_v2") => {}
+            Some("parent_groups_v1") => {
+                // Previous checks used observed parents to identify affected
+                // pages. A move seen by a peer can overwrite those old parents.
+                // Keep the census/single-page groups; recheck old multi-page ones.
+                let groups: Vec<Group> = self.db.prepare("SELECT json FROM inventory_groups WHERE verified=1 AND json_extract(json,'$.pages')>1")?
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .map(|row| Ok(serde_json::from_str(&row?)?))
+                    .collect::<Result<_>>()?;
+                let tx = self.db.unchecked_transaction()?;
+                let mut checked = self
+                    .get::<u64>("inventory_folders_checked")?
+                    .unwrap_or_default();
+                for mut group in groups {
+                    self.clear_group_files(&group)?;
+                    checked = checked.saturating_sub(group.parents.len() as u64);
+                    group.page = None;
+                    group.pages = 0;
+                    group.complete = false;
+                    group.seen_pages.clear();
+                    self.save_group(&group, false)?;
+                }
+                self.set("inventory_folders_checked", &checked)?;
+                self.set("inventory_strategy", &"parent_groups_v2")?;
+                tx.commit()?;
+            }
+            _ => {
+                self.invalidate_remote()?;
+                self.set("inventory_strategy", &"parent_groups_v2")?;
+            }
         }
         progress.phase = "drive_inventory".into();
         progress.current_path = None;
@@ -264,15 +285,20 @@ impl Manifest {
         let source = self.source()?;
         self.remote_item(&provider.get(&source.remote_root_id).await?)?;
         let mut retries = BTreeMap::<i64, u64>::new();
+        let mut cursor_verified_here = false;
         loop {
             cancelled(cancel)?;
             let mut active = self
                 .get::<Vec<i64>>("active_inventory_groups")?
                 .unwrap_or_default();
             if active.is_empty() {
-                // Only consume an unrecorded gap after the preceding groups have
-                // been verified. An unfinished cohort retains its original cursor.
-                self.grouped_changes(provider, cancel, false).await?;
+                // Refresh a saved idle gap on resume. Subsequent cohorts can
+                // share the preceding verification's committed cursor: their
+                // intervening changes are recorded by the next verification.
+                // An unfinished cohort always retains its original cursor.
+                if !cursor_verified_here {
+                    self.grouped_changes(provider, cancel, false).await?;
+                }
                 self.enqueue_folders()?;
                 let mut statement = self.db.prepare(
                     "SELECT id FROM inventory_groups WHERE verified=0 ORDER BY id LIMIT 4",
@@ -390,9 +416,10 @@ impl Manifest {
                 let mut group = self.group(*id)?;
                 // A complete single response has no page boundary across which
                 // an unchanged child can be skipped. Merge its intervening feed.
-                // Multi-page groups instead require a quiet scoped window.
-                let dirty =
-                    group.pages > 1 && changes.iter().any(|change| change.affects(&group.parents));
+                // Multi-page groups require a quiet cohort window. Observed
+                // parents cannot prove a move did not shift another group's
+                // pages: a peer listing may already show the new location.
+                let dirty = group.pages > 1 && !changes.is_empty();
                 if dirty {
                     let attempts = retries.entry(*id).or_default();
                     *attempts += 1;
@@ -417,6 +444,7 @@ impl Manifest {
             self.set("active_inventory_groups", &Vec::<i64>::new())?;
             self.inventory_metrics(progress)?;
             tx.commit()?;
+            cursor_verified_here = true;
             if exhausted {
                 return Err(Error::new(
                     ErrorCode::IncompleteScan,
