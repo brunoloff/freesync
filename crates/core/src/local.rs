@@ -144,20 +144,21 @@ pub fn identity(metadata: &Metadata) -> Option<String> {
         None
     }
 }
-fn modified(metadata: &Metadata) -> Result<u128> {
-    metadata
-        .modified()?
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .map_err(|_| {
-            Error::new(
-                ErrorCode::IncompleteScan,
-                "A file has an unsupported modification date.",
-            )
-        })
+pub fn modified(metadata: &Metadata) -> Result<i128> {
+    Ok(match metadata.modified()?.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos() as i128,
+        Err(before_epoch) => -(before_epoch.duration().as_nanos() as i128),
+    })
 }
 
 pub fn fingerprint(path: &Path) -> Result<Fingerprint> {
+    fingerprint_cancellable(path, &tokio_util::sync::CancellationToken::new())
+}
+
+pub fn fingerprint_cancellable(
+    path: &Path,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<Fingerprint> {
     let before = fs::symlink_metadata(path)?;
     if !before.is_file() || before.file_type().is_symlink() {
         return Err(Error::new(
@@ -176,6 +177,12 @@ pub fn fingerprint(path: &Path) -> Result<Fingerprint> {
     let mut bytes = [0u8; 65536];
     let mut size = 0;
     loop {
+        if cancel.is_cancelled() {
+            return Err(Error::new(
+                ErrorCode::Cancelled,
+                "The inventory was cancelled. Verified files are saved for resume.",
+            ));
+        }
         let n = file.read(&mut bytes)?;
         if n == 0 {
             break;

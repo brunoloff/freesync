@@ -13,11 +13,18 @@ use tokio_util::sync::CancellationToken;
 #[async_trait]
 pub trait ProviderFactory: Send + Sync {
     async fn connect(&self, pair: &PairConfig) -> Result<Arc<dyn Provider>>;
+    async fn adoption_connect(&self, _account: &str) -> Result<Arc<dyn Provider>> {
+        Err(Error::new(
+            ErrorCode::Unsupported,
+            "This provider does not support adoption.",
+        ))
+    }
 }
 
 /// Mutating settings requests execute between cycles on the sole profile owner.
 /// UI/control connections cannot race the planner, transfer journal or recovery.
 pub enum EngineCommand {
+    Adopt { scope: String, revision: u64 },
     Preview { pair_id: String },
     Activate { pair_id: String },
     Configure { pair: PairConfig },
@@ -34,12 +41,82 @@ async fn handle_request(
     factory: &dyn ProviderFactory,
     command: EngineCommand,
 ) -> Result<serde_json::Value> {
+    if let EngineCommand::Adopt { scope, revision } = &command {
+        let _lock = profile::ProfileLock::acquire(&profile.join("adoption"))?;
+        let manifest = crate::adoption::Manifest::open(&profile.join("adoption"))?;
+        let mut pair = manifest.scope(scope, *revision)?;
+        local::check_nonoverlap(
+            &pair.local_root,
+            &db.pairs()?
+                .into_iter()
+                .map(|p| p.local_root)
+                .collect::<Vec<_>>(),
+            profile,
+        )?;
+        let provider = factory.adoption_connect(&pair.account_email).await?;
+        if !provider
+            .identity()
+            .await?
+            .email
+            .eq_ignore_ascii_case(&pair.account_email)
+        {
+            return Err(Error::new(
+                ErrorCode::Authentication,
+                "The adoption account changed.",
+            ));
+        }
+        let remote_root = provider.get(&pair.remote_root_id).await?;
+        manifest
+            .verify_remote_location(provider.as_ref(), scope)
+            .await?;
+        if remote_root.trashed
+            || remote_root.kind != ItemKind::Folder
+            || remote_root.name != pair.remote_root_name
+        {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "The selected Drive folder changed. Refresh adoption.",
+            ));
+        }
+        let local = local::scan(&pair.local_root, &pair.excludes)?;
+        let remote =
+            crate::remote::snapshot(provider.as_ref(), &pair.remote_root_id, &pair.excludes, &[])
+                .await?;
+        let remote_root = provider.get(&pair.remote_root_id).await?;
+        manifest
+            .verify_remote_location(provider.as_ref(), scope)
+            .await?;
+        manifest.verify_scope(scope, &pair, &local, &remote)?;
+        let plan = crate::planner::plan(&pair, &local, &remote, &[])?;
+        let backup = profile
+            .join("backups")
+            .join(format!("before-adoption-{}", uuid::Uuid::new_v4()));
+        db.backup(&backup)?;
+        manifest.backup(&backup)?;
+        pair.enabled = true;
+        let grant = crate::adoption::Authorization {
+            pair: pair.clone(),
+            scope: scope.clone(),
+            remote_root,
+            manifest_revision: *revision,
+            approved_at: executor::now(),
+        };
+        db.adopt(&grant, &plan, &local, &remote)?;
+        let mut controls = db.controls()?;
+        controls.paused = false;
+        controls.sync_now += 1;
+        db.set("controls", &controls)?;
+        return Ok(
+            serde_json::json!({"activated":true,"pair_id":pair.id,"scope":scope,"local_root":pair.local_root,"remote_root_id":pair.remote_root_id,"backup":backup,"counts":crate::planner::preview(&plan)["counts"]}),
+        );
+    }
     let id = match &command {
         EngineCommand::Preview { pair_id }
         | EngineCommand::Activate { pair_id }
         | EngineCommand::KeepBoth { pair_id, .. }
         | EngineCommand::ApproveDeletions { pair_id, .. } => pair_id,
         EngineCommand::Configure { pair } => &pair.id,
+        EngineCommand::Adopt { .. } => unreachable!(),
     };
     let previous = db.pairs()?.into_iter().find(|p| &p.id == id);
     if let EngineCommand::Configure { mut pair } = command {
@@ -63,13 +140,13 @@ async fn handle_request(
                 .collect::<Vec<_>>(),
             profile,
         )?;
-        if !pair.test_only
-            || !(1..=3600).contains(&pair.poll_secs)
-            || !(1..=100_000).contains(&pair.deletion_limit)
-        {
+        if !pair.test_only {
+            crate::adoption::authorize(db, &pair)?;
+        }
+        if !(1..=3600).contains(&pair.poll_secs) || !(1..=100_000).contains(&pair.deletion_limit) {
             return Err(Error::new(
                 ErrorCode::InvalidConfig,
-                "Choose valid polling and deletion limits for the test pair.",
+                "Choose valid polling and deletion limits for this folder pair.",
             ));
         }
         factory.connect(&pair).await?;
@@ -114,6 +191,7 @@ async fn handle_request(
             Ok(serde_json::json!({"reviewed_deletions":count,"fresh_inventory_verified":true}))
         }
         EngineCommand::Configure { .. } => unreachable!(),
+        EngineCommand::Adopt { .. } => unreachable!(),
     }
 }
 pub fn status(

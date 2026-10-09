@@ -2,8 +2,8 @@ import { Fragment, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Folder, LoaderCircle, RefreshCw, Search } from 'lucide-react';
 import { message, rpc, type ActivityEntry, type ActivityPage } from './api';
 
-const actions = ['upload', 'download', 'create_drive_folder', 'create_local_folder', 'move_drive', 'move_local', 'drive_trash', 'local_recovery', 'recovery', 'conflict', 'keep_both', 'use_local', 'use_drive', 'compare', 'refresh_comparison', 'scan', 'sync', 'control', 'engine', 'desktop'];
-const outcomes = ['queued', 'started', 'progress', 'completed', 'retry', 'conflict', 'error', 'info'];
+const actions = ['upload', 'download', 'create_drive_folder', 'create_local_folder', 'move_drive', 'move_local', 'drive_trash', 'local_recovery', 'recovery', 'conflict', 'keep_both', 'use_local', 'use_drive', 'compare', 'refresh_comparison', 'scan', 'sync', 'adoption', 'control', 'engine', 'desktop'];
+const outcomes = ['queued', 'started', 'progress', 'completed', 'cancelled', 'retry', 'conflict', 'error', 'info'];
 const label = (value: string) => value.replaceAll('_', ' ').replace(/^./, c => c.toUpperCase());
 function size(value?: number | null): string {
   if (value == null) return '—';
@@ -72,8 +72,8 @@ function EntryDetails({ entry }: { entry: ActivityEntry }) {
     ['Event', entry.id], ['Time', new Date(entry.at_ms).toISOString()], ['Folder pair', entry.pair_id], ['File', entry.path], ['Description', entry.message],
     ['Operation / decision ID', d.operation_id], ['Previous path', d.from_path], ['Preserved copy', d.recovery_path], ['Attempt', d.attempt],
     ['Local version', d.local_bytes == null ? undefined : `${size(d.local_bytes)} (${d.local_bytes} bytes)`], ['Drive version', d.drive_bytes == null ? undefined : `${size(d.drive_bytes)} (${d.drive_bytes} bytes)`],
-    ['Transferred', d.bytes_done == null ? undefined : `${size(d.bytes_done)} (${d.bytes_done} bytes)`], ['Retry at', d.retry_at ? new Date(d.retry_at * 1000).toLocaleString() : undefined],
-    ['Error code', d.error_code], ['Duration', d.duration_ms == null ? undefined : `${d.duration_ms.toLocaleString()} ms`], ['Pending changes', d.changes], ['Conflicts', d.conflicts], ['Skipped items', d.skipped],
+    [entry.action === 'adoption' ? 'Hashed' : 'Transferred', d.bytes_done == null ? undefined : `${size(d.bytes_done)} (${d.bytes_done} bytes)`], ['Retry at', d.retry_at ? new Date(d.retry_at * 1000).toLocaleString() : undefined],
+    ['Error code', d.error_code], ['Duration', d.duration_ms == null ? undefined : `${d.duration_ms.toLocaleString()} ms`], [entry.action === 'adoption' ? 'Proposed transfers' : 'Pending changes', d.changes], [entry.action === 'adoption' ? 'Needs review' : 'Conflicts', d.conflicts], ['Skipped items', d.skipped],
   ];
   return <dl>{values.filter(([, value]) => value != null).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>;
 }

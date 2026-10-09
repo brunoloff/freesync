@@ -46,6 +46,7 @@ pub struct AppState {
     pub login: tokio::sync::Mutex<Option<PendingLogin>>,
     pub login_cancel: Mutex<Option<CancellationToken>>,
     pub last_error: Arc<Mutex<Option<Error>>>,
+    pub adoption_worker: Mutex<Option<(CancellationToken, JoinHandle<Result<()>>)>>,
 }
 fn internal() -> Error {
     Error::new(
@@ -85,7 +86,9 @@ impl AppState {
                     runtime.block_on(engine::run_controlled(
                         &mut db,
                         &directory,
-                        &freesync_google::GoogleFactory,
+                        &freesync_google::GoogleFactory {
+                            profile: directory.clone(),
+                        },
                         token,
                         receiver,
                     ))
@@ -107,6 +110,7 @@ impl AppState {
             login: tokio::sync::Mutex::new(None),
             login_cancel: Mutex::new(None),
             last_error,
+            adoption_worker: Mutex::new(None),
         })
     }
     pub fn database(&self) -> Result<Database> {
@@ -122,6 +126,10 @@ impl AppState {
     }
     pub fn stop(&self) -> Result<()> {
         self.cancel.cancel();
+        if let Some((token, worker)) = self.adoption_worker.lock().map_err(|_| internal())?.take() {
+            token.cancel();
+            let _ = worker.join().map_err(|_| internal())?;
+        }
         if let Some(cancellation) = self.login_cancel.lock().map_err(|_| internal())?.take() {
             cancellation.cancel();
         }
@@ -130,6 +138,126 @@ impl AppState {
             worker.join().map_err(|_| internal())??;
         }
         Ok(())
+    }
+    pub fn adoption_report(&self, status: Option<&str>, name: &str, offset: u64) -> Result<Value> {
+        let directory = self.profile.join("adoption");
+        if !directory.join("manifest.sqlite3").exists() {
+            let mut excludes = Vec::new();
+            let initial = freesync_google::adoption_source(Vec::new())?;
+            for pair in self.database()?.pairs()? {
+                if let Ok(relative) = pair.local_root.strip_prefix(&initial.local_root) {
+                    excludes.push(adoption::literal_glob(&relative.to_string_lossy()));
+                }
+            }
+            if let Ok(exe) = std::env::current_exe() {
+                for ancestor in exe.ancestors() {
+                    if ancestor.join("Cargo.toml").is_file() && ancestor.join("desktop").is_dir() {
+                        if let Ok(relative) = ancestor.strip_prefix(&initial.local_root) {
+                            excludes.push(adoption::literal_glob(&relative.to_string_lossy()));
+                        }
+                        break;
+                    }
+                }
+            }
+            return Ok(
+                json!({"source":freesync_google::adoption_source(excludes)?,"progress":{"phase":"pending","revision":0,"remote_items":0,"local_items":0,"hashed_bytes":0,"reused_hashes":0},"counts":{},"findings":[],"matching":0,"offset":0,"directory":directory}),
+            );
+        }
+        Ok(serde_json::to_value(
+            adoption::Manifest::open(&directory)?.report(status, name, offset, 50)?,
+        )?)
+    }
+    /// Inventory on its own thread, so normal sync and conflict controls remain responsive.
+    pub fn start_adoption(&self, excludes: Option<Vec<String>>) -> Result<Value> {
+        let mut worker = self.adoption_worker.lock().map_err(|_| internal())?;
+        if worker.as_ref().is_some_and(|(_, w)| !w.is_finished()) {
+            return Ok(json!({"working":true}));
+        }
+        if let Some((_, old)) = worker.take() {
+            let _ = old.join();
+        }
+        let directory = self.profile.join("adoption");
+        let lock = ProfileLock::acquire(&directory)?;
+        let initial = self.adoption_report(None, "", 0)?;
+        let manifest = adoption::Manifest::open(&directory)?;
+        let mut source = if let Ok(source) = manifest.source() {
+            source
+        } else {
+            let initial: adoption::Source = serde_json::from_value(initial["source"].clone())?;
+            freesync_google::adoption_source(excludes.unwrap_or(initial.excludes))?
+        };
+        freesync_google::inherit_adoption_exclusions(&mut source)?;
+        manifest.initialize(&source)?;
+        drop(manifest);
+        let cancel = self.cancel.child_token();
+        let token = cancel.clone();
+        let profile = self.profile.clone();
+        let handle = std::thread::Builder::new()
+            .name("freesync-adoption".into())
+            .spawn(move || {
+                let started = std::time::Instant::now();
+                let _lock = lock;
+                let manifest = adoption::Manifest::open(&directory)?;
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                let result = runtime.block_on(async {
+                    let provider = GoogleDrive::saved(&source.account_email).await?;
+                    manifest.run(&provider, &token).await
+                });
+                if let Err(error) = &result {
+                    let mut progress = manifest
+                        .get::<adoption::Progress>("progress")?
+                        .unwrap_or_default();
+                    progress.phase = if error.code == ErrorCode::Cancelled {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    }
+                    .into();
+                    progress.error = Some(error.clone());
+                    manifest.set("progress", &progress)?;
+                }
+                if let Ok(db) = Database::open(&profile) {
+                    let mut entry = match &result {
+                        Ok(()) => {
+                            let report = manifest.report(None, "", 0, 1)?;
+                            let mut entry = freesync_core::activity::Entry::new("adoption", "completed", format!("Read-only adoption report ready: {} Drive items, {} local items", report.progress.remote_items, report.progress.local_items));
+                            entry.details.bytes_done = Some(report.progress.hashed_bytes);
+                            entry.details.changes = Some((report.counts.get("upload").copied().unwrap_or(0) + report.counts.get("download").copied().unwrap_or(0)) as usize);
+                            entry.details.conflicts = Some(report.counts.get("unresolved").copied().unwrap_or(0) as usize);
+                            entry.details.skipped = Some((report.counts.get("protected").copied().unwrap_or(0) + report.counts.get("excluded").copied().unwrap_or(0)) as usize);
+                            entry
+                        }
+                        Err(error) => {
+                            let cancelled = error.code == ErrorCode::Cancelled;
+                            let mut entry = freesync_core::activity::Entry::new("adoption", if cancelled { "cancelled" } else { "error" }, if cancelled { "Read-only adoption inventory cancelled; checkpoints saved" } else { "Read-only adoption inventory stopped; inspect its saved progress" });
+                            entry.details.error_code = Some(error.code);
+                            entry
+                        }
+                    };
+                    entry.details.duration_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+                    let _ = db.record_activity(&entry);
+                }
+                result
+            })?;
+        *worker = Some((cancel, handle));
+        Ok(json!({"working":true}))
+    }
+    pub fn cancel_adoption(&self) -> Result<Value> {
+        if let Some((token, _)) = self
+            .adoption_worker
+            .lock()
+            .map_err(|_| internal())?
+            .as_ref()
+        {
+            token.cancel();
+            return Ok(json!({"cancelling":true}));
+        }
+        Err(Error::new(
+            ErrorCode::LockBusy,
+            "This report is running in another process. Stop that inventory process to save its progress.",
+        ))
     }
     pub fn stopped(&self) -> bool {
         self.worker
@@ -143,6 +271,11 @@ impl AppState {
         let mut pair_views = vec![];
         let mut conflicts = vec![];
         for pair in pairs {
+            let remote_path = db
+                .get::<adoption::Authorization>(&format!("adoption_authorization:{}", pair.id))?
+                .map(|g| g.scope)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| pair.remote_root_name.clone());
             let status = db.status(&pair.id)?.unwrap_or_else(|| PairStatus {
                 pair_id: pair.id.clone(),
                 state: "disabled".into(),
@@ -156,7 +289,7 @@ impl AppState {
                 .iter()
                 .filter(|o| matches!(o.action, Action::TrashRemote | Action::RecycleLocal))
                 .count();
-            pair_views.push(json!({"id":pair.id,"account":pair.account_email,"local_root":pair.local_root,"remote_id":pair.remote_root_id,"remote_name":pair.remote_root_name,"enabled":pair.enabled,"poll_secs":pair.poll_secs,"deletion_limit":pair.deletion_limit,"status":status,"deletion_hold":deletion_hold,"deletion_count":deletion_count}));
+            pair_views.push(json!({"id":pair.id,"account":pair.account_email,"local_root":pair.local_root,"remote_id":pair.remote_root_id,"remote_name":pair.remote_root_name,"remote_path":remote_path,"enabled":pair.enabled,"poll_secs":pair.poll_secs,"deletion_limit":pair.deletion_limit,"status":status,"deletion_hold":deletion_hold,"deletion_count":deletion_count}));
             for conflict in db.conflicts(&pair.id)? {
                 let ordinary = conflict
                     .local
@@ -251,11 +384,24 @@ impl AppState {
             PathBuf::from(local_path)
         };
         let selected = local::canonical_root(&path)?;
+        if let Some(mut existing) = self
+            .database()?
+            .pairs()?
+            .into_iter()
+            .find(|p| !p.test_only && p.local_root == selected && p.remote_root_id == remote_id)
+        {
+            adoption::authorize(&self.database()?, &existing)?;
+            existing.poll_secs = poll_secs;
+            existing.deletion_limit = deletion_limit;
+            return self
+                .request(EngineCommand::Configure { pair: existing })
+                .await;
+        }
         if selected != local::canonical_root(&pair.local_root)? || remote_id != pair.remote_root_id
         {
             return Err(Error::new(
                 ErrorCode::UnsafePath,
-                "This preview syncs only the mapped test-freesync folders. Adopting an existing tree is a later phase.",
+                "Use Adoption to review and activate an existing folder before changing its settings.",
             ));
         }
         pair.local_root = selected;

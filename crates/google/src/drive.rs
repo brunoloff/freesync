@@ -13,6 +13,7 @@ pub struct GoogleDrive {
     pub page_size: u32,
     write_root: Option<String>,
     write_parent: Option<String>,
+    adopted_root: Option<RemoteItem>,
 }
 impl GoogleDrive {
     pub async fn saved(account: &str) -> Result<Self> {
@@ -22,6 +23,7 @@ impl GoogleDrive {
             page_size: 1000,
             write_root: None,
             write_parent: None,
+            adopted_root: None,
         };
         let identity = provider.identity().await?;
         if !identity.email.eq_ignore_ascii_case(account) {
@@ -67,6 +69,18 @@ impl GoogleDrive {
         drive.healthy_write_root().await?;
         Ok(drive)
     }
+    pub async fn for_pair(pair: &PairConfig, profile: &std::path::Path) -> Result<Self> {
+        if pair.test_only {
+            return Self::for_test_pair(pair).await;
+        }
+        let db = freesync_core::db::Database::open(profile)?;
+        let grant = freesync_core::adoption::authorize(&db, pair)?;
+        let mut drive = Self::saved(&pair.account_email).await?;
+        drive.write_root = Some(pair.remote_root_id.clone());
+        drive.adopted_root = Some(grant.remote_root);
+        drive.healthy_write_root().await?;
+        Ok(drive)
+    }
     async fn healthy_write_root(&self) -> Result<&str> {
         let root = self.write_root.as_deref().ok_or_else(|| {
             Error::new(
@@ -75,17 +89,19 @@ impl GoogleDrive {
             )
         })?;
         let item = self.get(root).await?;
-        if item.trashed
-            || item.kind != ItemKind::Folder
-            || item.name != "test-freesync"
-            || !item
-                .parents
-                .iter()
-                .any(|p| Some(p) == self.write_parent.as_ref())
-        {
+        let scope_changed = if let Some(expected) = &self.adopted_root {
+            item.id != expected.id || item.name != expected.name || item.parents != expected.parents
+        } else {
+            item.name != "test-freesync"
+                || !item
+                    .parents
+                    .iter()
+                    .any(|p| Some(p) == self.write_parent.as_ref())
+        };
+        if item.trashed || item.kind != ItemKind::Folder || scope_changed {
             return Err(Error::new(
                 ErrorCode::UnsafePath,
-                "The authorized test root changed. Transfers are stopped.",
+                "The authorized sync root changed. Transfers are stopped.",
             ));
         }
         Ok(root)
@@ -287,6 +303,7 @@ impl GoogleDrive {
             ),
             ("pageSize", &self.page_size.clamp(1, 1000).to_string()),
             ("spaces", "drive"),
+            ("corpora", "user"),
         ]);
         if let Some(page) = page {
             request = request.query(&[("pageToken", page)]);
@@ -669,6 +686,9 @@ impl Provider for GoogleDrive {
             page,
         )
         .await
+    }
+    async fn inventory_page(&self, page: Option<&str>) -> Result<Page<RemoteItem>> {
+        self.list("trashed = false", page).await
     }
     async fn start_cursor(&self) -> Result<String> {
         let value: serde_json::Value = self

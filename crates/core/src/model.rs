@@ -31,12 +31,48 @@ pub struct LocalEntry {
     pub path: String,
     pub kind: ItemKind,
     pub fingerprint: Option<Fingerprint>,
-    pub modified_ns: u128,
+    #[serde(with = "timestamp")]
+    pub modified_ns: i128,
     pub file_identity: Option<String>,
 }
 impl LocalEntry {
     pub fn content_eq(&self, other: &Self) -> bool {
         self.kind == other.kind && self.fingerprint == other.fingerprint
+    }
+}
+
+// Keep existing numeric checkpoints readable. Very old or distant dates can
+// exceed JSON's 64-bit integer range, so encode those nanoseconds as a string.
+mod timestamp {
+    use serde::{Deserializer, Serializer, de::Visitor};
+
+    pub fn serialize<S: Serializer>(value: &i128, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Ok(value) = i64::try_from(*value) {
+            serializer.serialize_i64(value)
+        } else if let Ok(value) = u64::try_from(*value) {
+            serializer.serialize_u64(value)
+        } else {
+            serializer.serialize_str(&value.to_string())
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i128, D::Error> {
+        struct Timestamp;
+        impl Visitor<'_> for Timestamp {
+            type Value = i128;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("integer nanoseconds or their decimal string")
+            }
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<i128, E> {
+                Ok(value.into())
+            }
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<i128, E> {
+                Ok(value.into())
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<i128, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+        deserializer.deserialize_any(Timestamp)
     }
 }
 

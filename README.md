@@ -4,7 +4,7 @@ A desktop application being developed to synchronize local folders with Google D
 
 The application uses a Rust synchronization engine and a Tauri desktop interface. See [the implementation roadmap](PLAN.md) for the twelve cumulative phases and their acceptance criteria.
 
-Phases 1–7 are complete: a usable Linux desktop preview with local inventory/watchers, native OAuth, a paginated Drive adapter, persistent planning, recoverable transfers and automatic two-way sync within the authorized test pair. Validation includes 46 Rust tests, six OAuth-helper tests, eight live transfer checks, six automatic-sequence checks and a completed three-hour native-desktop run with 17 verified content checkpoints and three clean restarts. The UI passed sign-in, configuration, preview/activation, transfers, conflict preservation, pause/resume, native window lifecycle and clean Quit/restart. Existing-folder adoption and Windows/macOS validation come in later phases. See [implementation progress](PROGRESS.md), [desktop testing](DESKTOP_TESTING.md), [policies](POLICIES.md) and [OAuth setup](OAUTH_SETUP.md).
+Phases 1–7 are complete: a usable Linux desktop preview with local inventory/watchers, native OAuth, a paginated Drive adapter, persistent planning, recoverable transfers and automatic two-way sync within the authorized test pair. The Phase 8 adoption workflow now compares existing trees read-only and activates reviewed subfolders with backups; its full real-tree acceptance report has not yet finished. Validation includes 64 Rust tests, six OAuth-helper tests, live transfer and migration checks, and the earlier three-hour native-desktop run with 17 verified content checkpoints and three clean restarts. Windows/macOS validation and large-tree performance acceptance remain later phases. See [implementation progress](PROGRESS.md), [desktop testing](DESKTOP_TESTING.md), [adoption instructions](ADOPTION.md), [policies](POLICIES.md) and [OAuth setup](OAUTH_SETUP.md).
 
 ## Project website
 
@@ -25,7 +25,7 @@ cargo clippy --workspace --all-targets --features freesync-desktop/browser-test 
 
 The default profile is outside synchronized content, under the OS application data directory. On Linux it is `~/.local/share/freesync/profiles/default`. It contains private SQLite state, transfer staging and retained recovery files. OAuth credentials remain in the native credential store.
 
-Transfers currently require the private, explicitly authorized `test-freesync` mapping; arbitrary existing folders cannot be activated for writes. To operate that configured development pair:
+Transfers require either the private, explicitly authorized `test-freesync` mapping or a reviewed adoption receipt. To operate the configured development pair:
 
 ```sh
 ./target/debug/freesync sync-once
@@ -60,7 +60,7 @@ cargo build -p freesync-desktop
 
 The binary embeds the built frontend and needs no development web server. Rebuild the frontend and binary after UI changes. Close the settings window to keep the engine running in the tray. Left-click the tray icon to raise a hidden or background window, or hide it when already focused; right-click for the menu, including Quit to save progress and stop. The CLI and desktop share an exclusive profile owner; stop one before starting the other. Startup at login is optional and disabled until selected.
 
-The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. Phase 7 accepts only the private authorized test pair. Existing Crapbox adoption remains Phase 8; large-folder performance validation remains Phase 10.
+The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. New development pairs use the private authorized test mapping. Use **Adoption** for the existing-tree mapping established during setup: inventory read-only, inspect discrepancies, then review and activate selected subfolders. Equivalent files retain their Drive IDs; initial differences remain conflicts. Large-folder performance validation remains Phase 10.
 
 Conflict decisions run in the background with per-item progress. Keep both preserves the local file under a conflict name and syncs the Drive version under its original name. Use local retains the Drive original in recovery before uploading; Use Drive retains the local original before replacing it. Changed versions reject stale decisions. Refresh comparison updates the displayed versions without choosing one. Diff validates UTF-8 or UTF-16 text, makes private read-only copies of both versions, and launches an installed system viewer (KDiff3 is verified on Linux). KDiff3 copies are removed when its process closes while FreeSync is running. If FreeSync exits first, or a viewer can hand off to another process, copies remain in the private profile's `comparisons/` directory.
 

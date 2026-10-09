@@ -85,22 +85,33 @@ pub async fn dispatch(app: tauri::AppHandle, command: &str, args: Value) -> Resu
         "open_logs" => Some("Application logs folder opened"),
         "open_recovery" => Some("Recovery folder opened"),
         "preferences" => Some("Preferences updated"),
+        "adoption_start" => Some("Read-only adoption inventory requested"),
+        "adoption_cancel" => Some("Read-only adoption inventory cancellation requested"),
+        "adoption_activate" => Some("Reviewed adoption scope activated"),
         _ => None,
     };
-    let read = matches!(command, "snapshot" | "activity" | "folders");
+    let read = matches!(
+        command,
+        "snapshot" | "activity" | "folders" | "adoption_report" | "adoption_scope"
+    );
     if !read
         && (message.is_some() || result.is_err())
         && let Ok(db) = app.state::<Arc<AppState>>().database()
     {
+        let action = if command.starts_with("adoption_") {
+            "adoption"
+        } else {
+            "desktop"
+        };
         let mut entry = match &result {
             Ok(_) => freesync_core::activity::Entry::new(
-                "desktop",
+                action,
                 "info",
                 message.unwrap_or("Desktop action completed"),
             ),
             Err(error) => {
                 let mut e =
-                    freesync_core::activity::Entry::new("desktop", "error", error.message.clone());
+                    freesync_core::activity::Entry::new(action, "error", error.message.clone());
                 e.details.error_code = Some(error.code);
                 e
             }
@@ -126,6 +137,42 @@ async fn dispatch_inner(app: tauri::AppHandle, command: &str, args: Value) -> Re
             })
     };
     match command {
+        "adoption_scope" => {
+            freesync_core::adoption::Manifest::open(&state.profile.join("adoption"))?
+                .review_scope(&text("scope")?, args["revision"].as_u64().unwrap_or(0))
+        }
+        "adoption_report" => state.adoption_report(
+            args["status"].as_str(),
+            args["name"].as_str().unwrap_or(""),
+            args["offset"].as_u64().unwrap_or(0),
+        ),
+        "adoption_start" => state.start_adoption(
+            args.get("excludes")
+                .map(|v| serde_json::from_value(v.clone()))
+                .transpose()?,
+        ),
+        "adoption_cancel" => state.cancel_adoption(),
+        "adoption_activate" => {
+            state
+                .request(EngineCommand::Adopt {
+                    scope: text("scope")?,
+                    revision: args["revision"].as_u64().ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::InvalidConfig,
+                            "Review a completed adoption report first.",
+                        )
+                    })?,
+                })
+                .await
+        }
+        "open_adoption" => {
+            let directory = state.profile.join("adoption");
+            freesync_core::profile::private_directory(&directory)?;
+            app.opener()
+                .open_path(directory.to_string_lossy(), None::<&str>)
+                .map_err(|_| platform_error())?;
+            Ok(json!({"opened":true}))
+        }
         "snapshot" => {
             let mut value = state.snapshot()?;
             value["window_visible"] = json!(

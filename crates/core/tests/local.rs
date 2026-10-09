@@ -3,6 +3,57 @@ use std::{fs, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 #[test]
+fn pre_epoch_dates_and_legacy_checkpoint_numbers_remain_readable() {
+    use freesync_core::LocalEntry;
+    use std::time::UNIX_EPOCH;
+    let temp = tempfile::tempdir().unwrap();
+    let archived = temp.path().join("archived");
+    fs::create_dir(&archived).unwrap();
+    let file = archived.join("old.txt");
+    fs::write(&file, b"archived content").unwrap();
+    let old_date = UNIX_EPOCH - Duration::from_secs(10);
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(old_date))
+        .unwrap();
+    #[cfg(unix)]
+    fs::File::open(&archived)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(old_date))
+        .unwrap();
+    let first = local::scan(temp.path(), &[]).unwrap();
+    assert_eq!(
+        first.entries["archived/old.txt"].modified_ns,
+        -10_000_000_000
+    );
+    #[cfg(unix)]
+    assert_eq!(first.entries["archived"].modified_ns, -10_000_000_000);
+    assert_eq!(
+        first.entries,
+        local::scan(temp.path(), &[]).unwrap().entries
+    );
+    let mut entry = first.entries["archived/old.txt"].clone();
+    let json = serde_json::to_string(&entry).unwrap();
+    assert_eq!(entry, serde_json::from_str::<LocalEntry>(&json).unwrap());
+    let mut legacy = serde_json::to_value(&entry).unwrap();
+    legacy["modified_ns"] = serde_json::json!(1_700_000_000_000_000_000u64);
+    assert_eq!(
+        serde_json::from_value::<LocalEntry>(legacy)
+            .unwrap()
+            .modified_ns,
+        1_700_000_000_000_000_000
+    );
+    for stamp in [-12_000_000_000_000_000_000i128, 20_000_000_000_000_000_000] {
+        entry.modified_ns = stamp;
+        let json = serde_json::to_string(&entry).unwrap();
+        assert_eq!(entry, serde_json::from_str::<LocalEntry>(&json).unwrap());
+    }
+}
+
+#[test]
 fn scans_converge_after_create_edit_atomic_save_move_and_delete() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

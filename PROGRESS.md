@@ -1,6 +1,6 @@
 # Implementation progress
 
-Goal: complete all Phase 1–7 requirements in `PLAN.md`. A phase is complete only after its acceptance checks have current evidence.
+Goal: complete Phase 8 in `PLAN.md`, preserving the completed Phase 1–7 work. A phase is complete only after its acceptance checks have current evidence.
 
 ## Phase 1 — complete
 
@@ -81,3 +81,21 @@ Added durable local activity history and a filterable, sortable Activity tab. Hi
 Removed Hide settings and Quit from the GUI; Preferences occupies the bottom sidebar, which remains visible alongside long desktop activity lists. Window close still hides settings. Primary tray activation toggles native visibility; the context menu retains Open settings, Pause/Resume, Sync now and Quit. Linux uses a StatusNotifierItem backend because the preceding AppIndicator backend does not deliver primary-click events; other platforms retain the Tauri tray path.
 
 Five focused history tests cover schema upgrade/preserved state, literal/Unicode search, zero and unknown file sizes, safe ranges/sorting, anchored pagination during insertion, restart/deduplication, secret exclusion, log-write failures and rotation. The full Rust suite now has 51 passing tests; frontend builds and warning-free Clippy checks passed. Live Linux and browser checks are recorded in DESKTOP_TESTING.md. Phase 8 and large-tree validation have not started.
+
+## Phase 8 — in progress
+
+A checkpointed read-only adoption manifest now inventories Drive through account pagination, reconstructs the selected root by opaque IDs, hashes local files with cancellation and stamp-validated resume, consumes intervening Drive changes and presents matching, proposed-transfer, unresolved, excluded and protected counts. The desktop Adoption tab exposes progress, cancellation/resume, literal path search, result filters, pagination, exclusion review and per-folder activation scope.
+
+Activation runs on the sole owner, rejects overlapping roots and changed content or locations, backs up the profile and manifest, installs equivalent baselines and initial conflicts atomically, and creates a root-bound approval receipt. Non-test Google writes require that receipt and verify the reviewed Drive root and ancestry. Existing test-root authorization remains separate. Native link files and known unsafe/unreadable branches stay protected. ADOPTION.md describes the workflow and a stopped-client return to InSync.
+
+Eleven focused adoption tests and one InSync-import test cover initial matching without transfers, duplicate and mismatch isolation, remote checkpoint recovery, cancellation/root/account boundaries, stale scope rejection, Unicode paths and escaped exclusions, protected links, metadata-only version changes, approval binding, backup restoration, pagination changes, cancellation during hashing, changed exclusions, ancestor-spanning globs and moved ancestors. A disposable live fixture activated a non-test adopted pair inside the authorized test mapping, retained the unchanged Drive ID without duplication, preserved an initial mismatch, verified the write-scope guard, uploaded a new file and checked its downloaded bytes. A delayed Drive metadata-only version update found during live testing is accepted only after a fresh content comparison.
+
+GUI activation passed in an isolated fixture profile: two equivalent baselines, one initial conflict, no transfers queued, a bound scope receipt, and restorable profile/manifest backups. The scope dialog is immediately visible and fits a 620 × 520 viewport without horizontal overflow. Activation remains disabled until its consent checkbox is checked. Both fixture originals were preserved outside the sync tree and their paired Drive roots moved to recoverable Trash.
+
+The real read-only existing-tree inventory is running. GUI cancellation and resume preserved checkpoints, including 874,920 Drive items after a desktop restart. One listing pass reached 900,558 items. Further passes detected Drive changes, including a version-only update and removals, and retained an incomplete-scan result rather than declaring consistency. InSync remains stopped on this machine; the source of the later Drive changes is not yet established.
+
+Local inventory now runs before remote listing, so a busy Drive cannot prevent verified local hashes from being saved. A regression checks that a newly hashed file survives a subsequent expired Drive cursor and is reused on resume. The rebuilt GUI resumed the real job, remained responsive when switching tabs, and displayed the earlier adoption error and its duration in filtered Activity. Browser warning/error logs were empty.
+
+The real local inventory then found an archived folder dated before the Unix epoch. Timestamp representation now supports signed nanoseconds, reads existing numeric checkpoints, and stores dates beyond JSON's integer range losslessly. All 64 Rust tests and warning-free Clippy checks pass. A fresh read-only scan of the real archive succeeded with 26 entries, including its pre-epoch folder. Adoption is currently stopped while the user considers leaving; it has not been restarted. Consistent private checkpoint/profile backups reopened with integrity checks passing, 757,504 cached entries covering 65,731,555,167 bytes, and no non-test pairs. The corrected normal desktop build is available for Resume.
+
+The job excludes the already managed test mapping, the active FreeSync checkout and one existing local path recorded outside InSync's saved selection. No real existing-tree scope has been activated. Phase 8 remains incomplete until the full real report and final checks are recorded.

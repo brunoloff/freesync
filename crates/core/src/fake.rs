@@ -17,6 +17,7 @@ pub enum Fault {
     Timeout,
     RateLimit,
     UncertainSuccess,
+    CursorExpired,
 }
 #[derive(Clone)]
 pub struct FakeProvider {
@@ -124,6 +125,26 @@ impl FakeProvider {
             i.item.can_add_children = false;
         }
     }
+    fn listed(&self) {
+        let change = {
+            let mut state = self.state.lock().unwrap();
+            if let Some((remaining, _, _)) = &mut state.listing_change {
+                *remaining -= 1;
+            }
+            if state
+                .listing_change
+                .as_ref()
+                .is_some_and(|(remaining, _, _)| *remaining == 0)
+            {
+                state.listing_change.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, id, bytes)) = change {
+            self.edit(&id, &bytes);
+        }
+    }
     fn before(&self, method: &str) -> Result<bool> {
         let fault = self
             .state
@@ -138,6 +159,10 @@ impl FakeProvider {
             Some(Fault::Permission) => {
                 Err(Error::new(ErrorCode::Permission, "Fixture access denied."))
             }
+            Some(Fault::CursorExpired) => Err(Error::new(
+                ErrorCode::IncompleteScan,
+                "Fixture change cursor expired.",
+            )),
             Some(Fault::Timeout) => Err(Error::new(ErrorCode::Transient, "Fixture timeout.")),
             Some(Fault::RateLimit) => {
                 let mut e = Error::new(ErrorCode::RateLimited, "Fixture rate limit.");
@@ -233,6 +258,31 @@ fn check_version(actual: &RemoteItem, expected: &RemoteItem) -> Result<()> {
 
 #[async_trait]
 impl Provider for FakeProvider {
+    async fn inventory_page(&self, page: Option<&str>) -> Result<Page<RemoteItem>> {
+        self.before("inventory")?;
+        self.listed();
+        let state = self.state.lock().unwrap();
+        let offset = page
+            .unwrap_or("0")
+            .parse::<usize>()
+            .map_err(|_| Error::new(ErrorCode::InvalidConfig, "Invalid fixture page."))?;
+        let items: Vec<_> = state
+            .items
+            .values()
+            .filter(|s| s.item.id != "root" && !s.item.trashed)
+            .map(|s| s.item.clone())
+            .collect();
+        let end = (offset + self.page_size).min(items.len());
+        let next = (end < items.len()).then(|| end.to_string());
+        Ok(Page {
+            items: items
+                .into_iter()
+                .skip(offset)
+                .take(self.page_size)
+                .collect(),
+            next,
+        })
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             md5: true,
@@ -262,24 +312,7 @@ impl Provider for FakeProvider {
     }
     async fn children(&self, parent: &str, page: Option<&str>) -> Result<Page<RemoteItem>> {
         self.before("children")?;
-        let change = {
-            let mut state = self.state.lock().unwrap();
-            if let Some((remaining, _, _)) = &mut state.listing_change {
-                *remaining -= 1;
-            }
-            if state
-                .listing_change
-                .as_ref()
-                .is_some_and(|(remaining, _, _)| *remaining == 0)
-            {
-                state.listing_change.take()
-            } else {
-                None
-            }
-        };
-        if let Some((_, id, bytes)) = change {
-            self.edit(&id, &bytes);
-        }
+        self.listed();
         let offset = page
             .unwrap_or("0")
             .parse::<usize>()

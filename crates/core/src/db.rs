@@ -59,6 +59,64 @@ impl Database {
         )?;
         Ok(())
     }
+    pub fn backup(&self, directory: &Path) -> Result<()> {
+        crate::profile::private_directory(directory)?;
+        let target = directory.join("state.sqlite3");
+        if target.exists() {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "The profile backup already exists.",
+            ));
+        }
+        self.connection
+            .execute("VACUUM INTO ?1", [target.to_string_lossy().as_ref()])?;
+        Ok(())
+    }
+    /// Install an adoption grant and its initial comparison in one transaction.
+    pub fn adopt(
+        &mut self,
+        grant: &crate::adoption::Authorization,
+        plan: &Plan,
+        local: &crate::LocalInventory,
+        remote: &crate::RemoteInventory,
+    ) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        self.save_pair(&grant.pair)?;
+        self.set(&format!("adoption_authorization:{}", grant.pair.id), grant)?;
+        let pair = &grant.pair.id;
+        for (key, json) in [
+            (format!("local:{pair}"), serde_json::to_string(local)?),
+            (format!("remote:{pair}"), serde_json::to_string(remote)?),
+        ] {
+            tx.execute("INSERT INTO state VALUES(?1,?2)", params![key, json])?;
+        }
+        for b in &plan.accepted {
+            tx.execute(
+                "INSERT INTO baselines VALUES(?1,?2,?3)",
+                params![pair, b.path, serde_json::to_string(b)?],
+            )?;
+        }
+        for c in &plan.conflicts {
+            tx.execute(
+                "INSERT INTO conflicts VALUES(?1,?2,?3,?4)",
+                params![c.id, pair, c.path, serde_json::to_string(c)?],
+            )?;
+            crate::activity::insert(
+                &tx,
+                &crate::activity::Entry::conflict(c),
+                Some(&format!("conflict:{}", c.id)),
+            )?;
+        }
+        for o in &plan.operations {
+            tx.execute(
+                "INSERT INTO operations VALUES(?1,?2,'prepared',?3)",
+                params![o.id, pair, serde_json::to_string(o)?],
+            )?;
+            crate::activity::operation(&tx, o)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn pairs(&self) -> Result<Vec<PairConfig>> {
         self.all_json("SELECT json FROM pairs ORDER BY id", [])
     }

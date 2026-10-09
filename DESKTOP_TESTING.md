@@ -120,3 +120,23 @@ The UI checks use the real running native dispatcher through the opt-in browser 
 ### Tray foreground correction
 
 On 2026-10-09, replaced the Linux queued focus request with GTK presentation on the main thread and a fresh X11 user timestamp for explicit tray activation. Primary activation now hides only a visible, unminimized, focused window; a background window is raised instead. Native checks via the actual tray service verified `(visible, focused)` states `(true, false) → (true, true) → (false, false) → (true, true)`, with the tray registered throughout. No always-on-top flag or desktop focus-prevention preference was changed. Normal/QA builds and Clippy passed. This validates Linux/X11 focus through the app's published tray protocol, not physical mouse automation.
+
+## Phase 8 adoption checks
+
+Checked 2026-10-09 against the native Linux app and its private browser bridge. The real Crapbox job remains read-only; UI activation was exercised only in a disposable profile rooted inside the authorized test mapping.
+
+| Check | Evidence |
+| --- | --- |
+| Background inventory | Drive progress advanced independently of normal folder sync. Cancellation saved the current page; resume and a native restart retained checkpoints, including 874,920 items. |
+| Inherited exclusions | The UI showed the managed test folder, active development checkout and one exact existing local path recorded outside the matching InSync account/root's selection. No credentials or inferred patterns were imported. |
+| Scope review | The dialog showed local root, Drive folder ID, account, proposed counts and protected rules. Activation was disabled until consent. Its full-width layout fit a 620 × 520 viewport without horizontal overflow. |
+| Actual GUI activation | The disposable profile installed two equivalent baselines and one mismatch conflict, with zero queued transfers. The folder appeared enabled in Folders and showed its selected Drive scope. |
+| Backups | The pre-activation SQLite backup reopened with no pairs; the manifest backup retained all four fixture findings. The receipt bound exactly the disposable selected subfolder. |
+| Live provider behavior | A seeded migration retained the unchanged Drive ID and preserved differing bytes. A later new file uploaded and its downloaded bytes matched; writes outside the selected scope were rejected. |
+| Cleanup | Original local fixture files were retained in the private fixture profiles; paired Drive fixture roots went to recoverable Trash. Normal test-folder sync was resumed. |
+| Browser diagnostics | No warnings or errors appeared during the scope review and activation checks. |
+| Busy Drive recovery | Repeated real listings retained an incomplete-scan warning when the change feed advanced. After the local-first correction, Resume started local hashing immediately; 60,160 entries and 18.6 GiB of completed hashes were observed. Folders and Adoption navigation remained responsive while hashing a large video. |
+| Adoption activity | Combined Adoption action and Error outcome filters showed the saved incomplete-scan event; expanded details displayed its error code and duration. No browser warning/error logs appeared. |
+| Archived dates/checkpoint | The real local inventory stopped on a pre-epoch folder date. Signed timestamp handling passed 64 tests and a fresh read-only scan of the real 26-entry archive. Both private backups passed integrity checks and retained 757,504 cached entries covering 65,731,555,167 bytes. Adoption was left stopped while the user considered leaving. |
+
+Full real-report counts and final runtime evidence are still pending; these fixture checks do not establish Phase 10 full-tree performance acceptance.

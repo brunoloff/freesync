@@ -820,10 +820,13 @@ pub async fn execute(
     cancel: &CancellationToken,
     chunk_size: usize,
 ) -> Result<usize> {
-    if !pair.test_only || chunk_size == 0 {
+    if !pair.test_only {
+        crate::adoption::authorize(db, pair)?;
+    }
+    if chunk_size == 0 {
         return Err(Error::new(
             ErrorCode::UnsafePath,
-            "Only a configured test pair can execute in this preview.",
+            "Choose a nonzero transfer chunk size.",
         ));
     }
     let queue = db.operations(&pair.id)?;

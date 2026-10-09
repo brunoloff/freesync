@@ -49,6 +49,14 @@ pub trait Provider: Send + Sync {
     async fn identity(&self) -> Result<Account>;
     async fn get(&self, id: &str) -> Result<RemoteItem>;
     async fn children(&self, parent: &str, page: Option<&str>) -> Result<Page<RemoteItem>>;
+    /// Read-only account inventory, used to adopt large pre-existing trees.
+    /// Callers resolve ancestry from opaque IDs and consume changes after listing.
+    async fn inventory_page(&self, _page: Option<&str>) -> Result<Page<RemoteItem>> {
+        Err(crate::Error::new(
+            crate::ErrorCode::Unsupported,
+            "This provider cannot inventory an account for adoption.",
+        ))
+    }
     async fn start_cursor(&self) -> Result<String>;
     async fn changes(&self, cursor: &str) -> Result<Changes>;
     async fn download(&self, id: &str, offset: u64, max_bytes: usize) -> Result<Vec<u8>>;

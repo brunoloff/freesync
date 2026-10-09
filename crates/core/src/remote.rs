@@ -33,14 +33,6 @@ async fn traverse(
                 if item.trashed {
                     continue;
                 }
-                // A Drive name is one component, never a slash-delimited local path.
-                validate_relative(&item.name)?;
-                if item.name.contains('/') {
-                    return Err(Error::new(
-                        ErrorCode::Unsupported,
-                        "A Drive filename contains a path separator. Rename it before syncing.",
-                    ));
-                }
                 let relative = if path.is_empty() {
                     item.name.clone()
                 } else {
@@ -48,6 +40,14 @@ async fn traverse(
                 };
                 if exclusions.excludes(&relative) {
                     continue;
+                }
+                // An excluded name stays outside reconciliation, including unsupported names.
+                validate_relative(&item.name)?;
+                if item.name.contains('/') {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "A Drive filename contains a path separator. Rename it before syncing.",
+                    ));
                 }
                 if item.kind == ItemKind::Folder {
                     todo.push((relative.clone(), item.id.clone()));

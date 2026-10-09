@@ -29,11 +29,25 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Inventory the mapped existing tree without transfers. Resume preserves verified hashes.
+    Adopt {
+        #[arg(long)]
+        exclude: Vec<String>,
+    },
+    /// Read the saved adoption report (no scan or transfers).
+    AdoptionReport {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value = "")]
+        name: String,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+    },
     /// Initialize an isolated application profile (does not sync files).
     Init,
     /// Inspect profile and pair status as JSON.
     Status,
-    /// Run continuous sync for activated test pairs; SIGINT saves progress and stops.
+    /// Run continuous sync for authorized pairs; SIGINT saves progress and stops.
     Run,
     /// Pause the current profile owner without starting another engine.
     Pause,
@@ -74,7 +88,7 @@ enum Command {
         #[arg(long, default_value = "test-freesync")]
         pair: String,
     },
-    /// Execute the queued test-pair plan once with durable transfer progress.
+    /// Execute an authorized pair's queued plan once with durable transfer progress.
     SyncOnce {
         #[arg(long, default_value = "test-freesync")]
         pair: String,
@@ -159,6 +173,50 @@ enum Command {
 async fn execute(cli: Cli) -> Result<()> {
     let profile = cli.profile.unwrap_or_else(default_profile);
     match cli.command {
+        Command::Adopt { exclude } => {
+            let directory = profile.join("adoption");
+            let _owner = ProfileLock::acquire(&directory)?;
+            let manifest = freesync_core::adoption::Manifest::open(&directory)?;
+            let source = if let Ok(mut saved) = manifest.source() {
+                if !exclude.is_empty() {
+                    saved.excludes = exclude;
+                }
+                freesync_google::inherit_adoption_exclusions(&mut saved)?;
+                saved
+            } else {
+                freesync_google::adoption_source(exclude)?
+            };
+            manifest.initialize(&source)?;
+            let provider = GoogleDrive::saved(&source.account_email).await?;
+            let cancel = CancellationToken::new();
+            let token = cancel.clone();
+            tokio::spawn(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                token.cancel();
+            });
+            let result = manifest.run(&provider, &cancel).await;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&manifest.report(None, "", 0, 50)?)?
+            );
+            result?;
+        }
+        Command::AdoptionReport {
+            status,
+            name,
+            offset,
+        } => {
+            let manifest = freesync_core::adoption::Manifest::open(&profile.join("adoption"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&manifest.report(
+                    status.as_deref(),
+                    &name,
+                    offset,
+                    100
+                )?)?
+            );
+        }
         Command::KeepBoth { pair, path } => {
             let _owner = ProfileLock::acquire(&profile)?;
             let mut db = Database::open(&profile)?;
@@ -172,7 +230,7 @@ async fn execute(cli: Cli) -> Result<()> {
                         "Choose a configured folder pair.",
                     )
                 })?;
-            let provider = GoogleDrive::for_test_pair(&config).await?;
+            let provider = GoogleDrive::for_pair(&config, &profile).await?;
             let preserved =
                 freesync_core::executor::keep_both(&mut db, &config, &provider, &path).await?;
             println!(
@@ -192,7 +250,7 @@ async fn execute(cli: Cli) -> Result<()> {
                         "Choose a configured folder pair.",
                     )
                 })?;
-            GoogleDrive::for_test_pair(&config).await?;
+            GoogleDrive::for_pair(&config, &profile).await?;
             db.retry_conflict(&pair, &path)?;
             let mut controls = db.controls()?;
             controls.sync_now += 1;
@@ -214,7 +272,7 @@ async fn execute(cli: Cli) -> Result<()> {
                         "Choose a configured folder pair.",
                     )
                 })?;
-            let provider = GoogleDrive::for_test_pair(&pair).await?;
+            let provider = GoogleDrive::for_pair(&pair, &profile).await?;
             freesync_core::executor::approve_deletions(&mut db, &pair, &provider, count).await?;
             let mut controls = db.controls()?;
             controls.sync_now += 1;
@@ -234,8 +292,15 @@ async fn execute(cli: Cli) -> Result<()> {
                 signal.cancel();
             });
             println!("{}", serde_json::json!({"engine_started":true}));
-            freesync_core::engine::run(&mut db, &profile, &freesync_google::GoogleFactory, cancel)
-                .await?;
+            freesync_core::engine::run(
+                &mut db,
+                &profile,
+                &freesync_google::GoogleFactory {
+                    profile: profile.clone(),
+                },
+                cancel,
+            )
+            .await?;
             println!("{}", serde_json::json!({"engine_stopped":true}));
         }
         Command::Pause | Command::Resume | Command::SyncNow | Command::Quit => {
@@ -267,7 +332,7 @@ async fn execute(cli: Cli) -> Result<()> {
                         "Choose a configured folder pair.",
                     )
                 })?;
-            let drive = GoogleDrive::for_test_pair(&pair).await?;
+            let drive = GoogleDrive::for_pair(&pair, &profile).await?;
             let plan = freesync_core::reconcile::prepare(&mut db, &pair, &drive).await?;
             pair.enabled = true;
             db.save_pair(&pair)?;
@@ -289,7 +354,7 @@ async fn execute(cli: Cli) -> Result<()> {
                         "Choose a configured folder pair.",
                     )
                 })?;
-            let drive = GoogleDrive::for_test_pair(&pair).await?;
+            let drive = GoogleDrive::for_pair(&pair, &profile).await?;
             let cancellation = CancellationToken::new();
             let signal = cancellation.clone();
             tokio::spawn(async move {
@@ -324,7 +389,7 @@ async fn execute(cli: Cli) -> Result<()> {
                         "Configure the test pair first.",
                     )
                 })?;
-            GoogleDrive::for_test_pair(&pair)
+            GoogleDrive::for_pair(&pair, &profile)
                 .await?
                 .verify_conditional_write(&id)
                 .await?;

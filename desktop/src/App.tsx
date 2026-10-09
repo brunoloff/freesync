@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeftRight, ArrowRight, Check, ChevronRight, Eye, History, FileDiff, Folder, LoaderCircle, Minus, Pause, Play, Plus, RefreshCw, Settings, X, TriangleAlert } from 'lucide-react';
 import { message, native, rpc, type Conflict, type ConflictChoice, type ConflictJob, type FolderPage, type Pair, type Preview, type Snapshot } from './api';
 import Activity from './Activity';
+import Adoption from './Adoption';
+import Modal from './Modal';
 import { invoke } from '@tauri-apps/api/core';
-type Page = 'Folders' | 'Conflicts' | 'Activity' | 'Preferences';
+type Page = 'Folders' | 'Conflicts' | 'Activity' | 'Adoption' | 'Preferences';
 const compactPath = (path: string) => path.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/Users\/[^/]+\//, '~/');
 const bytes = (value?: number) => value === undefined ? 'Unavailable' : value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
 function statusLabel(pair: Pair, paused: boolean): string {
@@ -14,29 +16,6 @@ function statusLabel(pair: Pair, paused: boolean): string {
   return ({ idle: 'Up to date', scanning: 'Checking changes', syncing: 'Syncing', waiting_retry: 'Retry scheduled', reconnect: 'Reconnect account', offline: 'Waiting for network', stopped: 'Stopped' } as Record<string, string>)[pair.status.state] ?? 'Waiting';
 }
 function StatusMark({ good = false }: { good?: boolean }) { return good ? <span className="check-mark"><Check size={14} /></span> : <span className="status-dot" />; }
-function Modal({ title, description, children, footer, onClose }: { title: string; description?: string; children: ReactNode; footer?: ReactNode; onClose: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
-  const close = useRef(onClose); close.current = onClose;
-  useEffect(() => {
-    const element = dialog.current!;
-    const previous = document.activeElement as HTMLElement | null;
-    element.showModal();
-    const cancel = (event: Event) => { event.preventDefault(); close.current(); };
-    const trap = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return;
-      const controls = [...element.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')].filter(control => control.getClientRects().length > 0);
-      const first = controls[0]; const last = controls[controls.length - 1];
-      if (!first) { event.preventDefault(); return; }
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    element.addEventListener('cancel', cancel);
-    element.addEventListener('keydown', trap);
-    return () => { element.removeEventListener('cancel', cancel); element.removeEventListener('keydown', trap); element.close(); previous?.focus(); };
-  }, []);
-  return <dialog ref={dialog} className="dialog" aria-labelledby={titleId}><header className="dialog-heading"><div><h2 id={titleId}>{title}</h2>{description && <p>{description}</p>}</div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X /></button></header><div className="dialog-body">{children}</div>{footer && <footer className="dialog-footer">{footer}</footer>}</dialog>;
-}
 export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [page, setPage] = useState<Page>('Folders');
@@ -140,22 +119,22 @@ export default function App() {
   const good = !!pair?.enabled && !paused && !pair.status.error && !pair.status.conflicts && !pair.deletion_hold;
   const footer = paused ? 'Sync is paused' : snapshot?.pairs.some(p => p.enabled) ? 'Sync is running' : 'Choose a folder to start syncing';
   return <div className="app-shell" data-window-visible={snapshot?.window_visible} data-tray-available={snapshot?.tray_available} data-native-view-ready={snapshot?.native_ui?.mounted} data-native-ipc-verified={snapshot?.native_ui?.ipc_verified}>
-    <aside className="sidebar"><div className="wordmark">FreeSync</div><nav aria-label="Main navigation">{(['Folders', 'Conflicts', 'Activity'] as Page[]).map(name => {
-      const Icon = name === 'Folders' ? Folder : name === 'Conflicts' ? ArrowLeftRight : History;
+    <aside className="sidebar"><div className="wordmark">FreeSync</div><nav aria-label="Main navigation">{(['Folders', 'Conflicts', 'Activity', 'Adoption'] as Page[]).map(name => {
+      const Icon = name === 'Folders' || name === 'Adoption' ? Folder : name === 'Conflicts' ? ArrowLeftRight : History;
       return <button key={name} className={page === name ? 'nav-link selected' : 'nav-link'} aria-current={page === name ? 'page' : undefined} onClick={() => setPage(name)}><Icon />{name}{name === 'Conflicts' && !!snapshot?.conflicts.length && <span className="count">{snapshot.conflicts.length}</span>}</button>;
     })}</nav><div className="sidebar-bottom"><div className="account-status"><span className="status-dot" /><div><strong>Personal Google account</strong><span>{snapshot?.account_verified ? 'Connected' : snapshot?.account ? 'Checking connection' : 'Not connected'}</span></div></div><div className="sidebar-actions"><button className={page === 'Preferences' ? 'nav-link selected' : 'nav-link'} aria-current={page === 'Preferences' ? 'page' : undefined} onClick={() => setPage('Preferences')}><Settings />Preferences</button></div></div></aside>
-    <div className="main-shell"><main><header className="page-heading"><div><h1>{page}</h1><p>{page === 'Folders' ? 'Choose what stays in sync.' : page === 'Conflicts' ? 'Preserve both versions when changes overlap.' : page === 'Activity' ? 'See what happened and investigate sync problems.' : 'Make FreeSync work the way you want.'}</p></div><div className="heading-actions"><button disabled={busy} onClick={() => control(paused ? 'resume' : 'pause')}>{paused ? <Play /> : <Pause />}{paused ? 'Resume' : 'Pause'}</button><button disabled={busy} onClick={() => control('sync_now')}><RefreshCw />Sync now</button></div></header>
+    <div className="main-shell"><main><header className="page-heading"><div><h1>{page}</h1><p>{page === 'Folders' ? 'Choose what stays in sync.' : page === 'Conflicts' ? 'Preserve both versions when changes overlap.' : page === 'Activity' ? 'See what happened and investigate sync problems.' : page === 'Adoption' ? 'Reuse your existing synchronized files.' : 'Make FreeSync work the way you want.'}</p></div><div className="heading-actions"><button disabled={busy} onClick={() => control(paused ? 'resume' : 'pause')}>{paused ? <Play /> : <Pause />}{paused ? 'Resume' : 'Pause'}</button><button disabled={busy} onClick={() => control('sync_now')}><RefreshCw />Sync now</button></div></header>
       {error && <div role="alert" className="banner error"><TriangleAlert /><span>{error}</span><button aria-label="Dismiss error" className="icon-button" onClick={() => setError('')}><X /></button></div>}
       {snapshot && !snapshot.window_visible && <div role="status" className="banner"><Eye /><span>Settings are hidden. Sync continues in the tray.</span><button onClick={() => { void action('show').catch(() => {}); }}>Show settings</button></div>}
       {notice && <div role="status" className="banner"><Check /><span>{notice}</span><button aria-label="Dismiss message" className="icon-button" onClick={() => setNotice('')}><X /></button></div>}
-      {!snapshot ? <div className="loading"><LoaderCircle className="spin" />Connecting to the background engine…</div> : page === 'Folders' ? <>
+      {!snapshot ? <div className="loading"><LoaderCircle className="spin" />Connecting to the background engine…</div> : page === 'Adoption' ? <Adoption onActivated={() => { void refresh(); }} /> : page === 'Folders' ? <>
         <div className="section-heading"><h2>Your folders</h2><button className="primary" disabled={busy} onClick={() => setPairDialog(true)}><Plus />Add folder</button></div>
         <div className="pair-list">{snapshot.pairs.map(p => <button key={p.id} className={`pair-row ${pair?.id === p.id ? 'selected' : ''}`} onClick={() => setSelected(p.id)} aria-pressed={pair?.id === p.id}><Folder size={27} /><div className="pair-title"><strong>{p.remote_name}</strong><span>Two-way sync</span></div><div className="pair-status"><StatusMark good={p.enabled && !paused && !p.status.conflicts && !p.status.error} />{statusLabel(p, paused)}</div><ChevronRight /></button>)}</div>
-        {pair ? <section className="pair-details" aria-label="Selected folder details"><div className="path-columns"><div><label>Local folder</label><p>{compactPath(pair.local_root)}</p></div><div><label>Google Drive folder</label><p>My Drive / {pair.remote_name}</p></div></div><dl className="detail-rows"><div><dt>Last synced</dt><dd>{pair.status.last_sync ? new Date(pair.status.last_sync * 1000).toLocaleString() : 'Not yet'}</dd></div><div><dt>Pending changes</dt><dd>{pair.status.queued || 'None'}</dd></div>{pair.status.current_path && <div><dt>Current work</dt><dd className="work-path">{pair.status.current_path}{pair.status.total_bytes > 0 && <><progress value={pair.status.progress_bytes} max={pair.status.total_bytes} />{bytes(pair.status.progress_bytes)} of {bytes(pair.status.total_bytes)}</>}</dd></div>}{pair.status.retry_at && <div><dt>Next retry</dt><dd>{new Date(pair.status.retry_at * 1000).toLocaleTimeString()}</dd></div>}</dl>
+        {pair ? <section className="pair-details" aria-label="Selected folder details"><div className="path-columns"><div><label>Local folder</label><p>{compactPath(pair.local_root)}</p></div><div><label>Google Drive folder</label><p>My Drive / {pair.remote_path ?? pair.remote_name}</p></div></div><dl className="detail-rows"><div><dt>Last synced</dt><dd>{pair.status.last_sync ? new Date(pair.status.last_sync * 1000).toLocaleString() : 'Not yet'}</dd></div><div><dt>Pending changes</dt><dd>{pair.status.queued || 'None'}</dd></div>{pair.status.current_path && <div><dt>Current work</dt><dd className="work-path">{pair.status.current_path}{pair.status.total_bytes > 0 && <><progress value={pair.status.progress_bytes} max={pair.status.total_bytes} />{bytes(pair.status.progress_bytes)} of {bytes(pair.status.total_bytes)}</>}</dd></div>}{pair.status.retry_at && <div><dt>Next retry</dt><dd>{new Date(pair.status.retry_at * 1000).toLocaleTimeString()}</dd></div>}</dl>
           {pair.status.error && <div role="alert" className="banner error"><TriangleAlert /><span>{pair.status.error.message}</span>{pair.status.state === 'reconnect' && <button onClick={() => setLogin(true)}>Reconnect</button>}</div>}
           {pair.deletion_hold && <div className="banner error"><TriangleAlert /><span>{pair.deletion_count} deletions are paused for review. Review their paths in the preview before continuing.</span><button disabled={busy} onClick={() => { void prepare(pair.id).catch(() => {}); }}>Review</button></div>}
           <div className="detail-actions"><button disabled={busy} onClick={() => { void prepare(pair.id).catch(() => {}); }}>Preview changes{busy && <LoaderCircle className="spin" />}</button><button className="text-button" disabled={busy} onClick={() => setPairDialog(true)}>Folder settings</button></div><p className="muted recovery-note">Deleted files are kept in recovery.</p>
-        </section> : <div className="empty"><Folder /><h3>No folders yet</h3><p>Add the test-freesync folder to preview its changes.</p><button className="primary" onClick={() => setPairDialog(true)}>Add folder</button></div>}
+        </section> : <div className="empty"><Folder /><h3>No folders yet</h3><p>Add the test folder, or use Adoption to review existing synchronized folders.</p><button className="primary" onClick={() => setPairDialog(true)}>Add folder</button></div>}
       </> : page === 'Conflicts' ? <section className="conflict-list">
         {snapshot.conflicts.length ? snapshot.conflicts.map(c => <ConflictRow key={c.id} conflict={c} job={snapshot.conflict_jobs.find(j => j.conflict_id === c.id)} pending={pendingConflicts.has(c.id)} error={conflictErrors[c.id]} onAction={choice => { void resolve(c, choice); }} />) : <div className="empty"><Check /><h3>No conflicts</h3><p>Your folder pairs have no unresolved conflicts.</p></div>}
         {snapshot.conflict_jobs.some(j => !['done', 'failed'].includes(j.state)) && <section className="background-actions" aria-label="Background conflict actions"><h2>Background actions</h2>{snapshot.conflict_jobs.filter(j => !['done', 'failed'].includes(j.state)).map(j => <div key={j.id} role="status"><LoaderCircle className="spin" /><div><strong>{j.path}</strong><span>{j.state === 'syncing' && paused ? 'Waiting for sync to resume' : jobLabel(j)}</span></div></div>)}</section>}
