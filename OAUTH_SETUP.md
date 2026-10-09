@@ -1,6 +1,6 @@
 # Google Drive OAuth setup
 
-OAuth prerequisites and the Rust Phase 3 adapter were completed and verified on 8 October 2026. Live transfers and the desktop interface are still under development; see [implementation progress](PROGRESS.md).
+OAuth prerequisites and the Rust Phase 3 adapter were completed and verified on 8 October 2026. Phases 1–7, including live transfers and the Linux desktop preview, completed validation on 9 October 2026; see [implementation progress](PROGRESS.md). Public-app verification remains deferred for this personal development setup.
 
 ## Google Cloud configuration
 
@@ -48,6 +48,6 @@ The original OAuth checks were read-only. Rust sign-in and forced refresh were s
 
 Repository: <https://github.com/brunoloff/freesync>. GitHub Pages serves `docs/` from `main`.
 
-The current workspace contains a protected, empty `.git` directory rather than an initialized checkout. Publication used a separate temporary Git checkout and copied only an explicit list of source files. Preserve that workspace metadata; establish a proper development checkout when beginning implementation. Credentials were not included in the published files.
+The current workspace contains a protected, empty `.git` directory rather than an initialized checkout. Publication uses a separate temporary Git checkout and copies only an explicit list of source files. The workspace metadata is preserved. Credentials and private test evidence are excluded from published files.
 
 Google Cloud currently contains an earlier unused desktop client with the same display name, created during the console's error/retry sequence. Authorization uses the client ID from local metadata; do not select a client by display name alone. The unused client has not been authorized by the bootstrap.

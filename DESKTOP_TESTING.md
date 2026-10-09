@@ -73,12 +73,19 @@ later supervised run verified seven content checkpoints and three clean restarts
 but was stopped after a regression exposed scan feedback from read/access events
 and unrelated sibling changes. The watcher correction preserves real native
 modifications and rescan warnings. All six live automatic-sequence checks passed
-with the corrected runtime; its fresh three-hour native-owner run is active.
+with the corrected runtime.
 
-`scripts/live_soak.py` supervises a fresh three-hour run after the automatic
-sequence passes, independently of terminal session lifetime. It alternates local
-and remote changes, downloads actual Drive content for every checkpoint, verifies retained conflicts and empty queues, and
-performs two scheduled native-process restarts plus the UI Quit restart. Private
-evidence records heartbeat, owner process, checkpoint results, clean restarts and
-the final graceful Quit. A cumulative Phase 7 milestone remains pending until
-this evidence reports success; elapsed time alone cannot satisfy it.
+On 9 October 2026, `scripts/live_soak.py` completed 10,820.76 seconds with the
+corrected native desktop owner, independently of terminal session lifetime. All
+17 alternating local/remote checkpoints verified actual disk bytes and downloaded
+Drive bytes, retained the intentional conflict and ended with an empty queue.
+Two scheduled restarts plus the UI Quit/restart were clean. The final Quit returned
+status 0; both the owner and supervisor stopped. The private report records
+success, completion time and graceful shutdown; elapsed time alone cannot pass.
+
+The normal frontend was subsequently rebuilt without `VITE_FREESYNC_NATIVE_PROBE`,
+and the native binary without the `browser-test` feature. The normal Linux preview
+started with the saved test pair and no pending transfers. The last 1280 × 720
+browser capture showed Connected, the three retained test conflicts, verified
+native-renderer/IPC indicators and no horizontal overflow; warning/error logs
+were empty. Phases 1–7 are complete within the declared Linux test-pair scope.
