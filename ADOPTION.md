@@ -25,6 +25,8 @@ freesync adoption-report --status unresolved --name 'search text'
 
 Ctrl+C cancels a CLI inventory. GUI cancellation controls its own background inventory; a CLI process must be stopped from its own terminal. Neither command starts transfers.
 
+Report totals count files, folders and other findings. An excluded finding can represent a whole branch. The report is a saved comparison at the displayed completion time; refreshing it makes a new read-only comparison. Proposed uploads/downloads are review findings until a selected scope is activated.
+
 ## Review and gradual activation
 
 After the report is ready, search for a folder and choose **Review folder**. Inspect the exact local folder, account, Drive identity, counts of proposed transfers, initial differences and protected paths. Confirm the checkbox and select **Activate reviewed folder** only when you want that folder and its included descendants to synchronize.

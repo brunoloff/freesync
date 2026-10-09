@@ -123,7 +123,7 @@ On 2026-10-09, replaced the Linux queued focus request with GTK presentation on 
 
 ## Phase 8 adoption checks
 
-Checked 2026-10-09 against the native Linux app and its private browser bridge. The real Crapbox job remains read-only; UI activation was exercised only in a disposable profile rooted inside the authorized test mapping.
+Checked 2026-10-09 against the native Linux app and its private browser bridge. The real Crapbox report completed read-only; UI activation was exercised only in a disposable profile rooted inside the authorized test mapping.
 
 | Check | Evidence |
 | --- | --- |
@@ -146,4 +146,17 @@ Checked 2026-10-09 against the native Linux app and its private browser bridge. 
 
 | Cross-group moves | A concurrent peer listing saw a moved file at its new parent and masked its old parent before the feed was read. An isolated reproduction with the old rule falsely proposed uploading an unchanged skipped child. The conservative cohort rule passed; a checkpoint-upgrade regression retained the census while rechecking old multi-page groups. All 77 Rust tests and Clippy checks pass. |
 
-Full real-report counts and final runtime evidence are still pending; these fixture checks do not establish Phase 10 full-tree performance acceptance.
+### Final Phase 8 acceptance
+
+The completed real report reached ready revision 13 at 19:38:32 Europe/Lisbon on 2026-10-09, with all 168,166 Drive parents checked, 900,341 Drive metadata items and 762,637 local entries. Counts are 759,850 matched, 2,430 unresolved, 578 proposed uploads, 133,477 proposed downloads, 93 protected items and three excluded branches. These are item counts, including folders. The report made no transfers; no real existing-tree pair was activated.
+
+| Final check | Result |
+| --- | --- |
+| Report filters and paging | A real name search returned the expected folder and three matched children. Result filtering showed 2,430 review findings; Next advanced 1–50 to 51–100. Reset restored 1–50 of 896,431 findings. |
+| Real scope review | Local folder, Drive identity, account, matching count and eight protected extension rules were visible. The consent checkbox stayed unchecked and Activate reviewed folder stayed disabled. The review was closed without activation. |
+| Return and activity | Return-to-InSync instructions were visible. The completed Adoption activity event exposed inventory counts, hashed bytes, duration, proposed transfers and review/skipped counts. |
+| Rendered QA | Final browser captures of the report and scope dialog were visually inspected. Document width equaled viewport width at 1265px; warning/error logs were empty. The earlier fixture review also passed at 620 × 520. |
+| Final backup | Consistent SQLite snapshots of the ready profile and complete manifest passed integrity checks and matched ready revision, counts and verified groups. The private backup also contains summary and verification JSON. |
+| Normal restart | QA owner exited cleanly. The normal binary restarted in the tray with saved settings, one test-only pair, zero queued transfers and the same ready report. The old loopback listener closed and stale QA launch metadata was removed. InSync was stopped. |
+
+The final normal build omits the browser-test feature. The browser mirror verified rendered controls against the actual native dispatcher; these checks do not claim native WebKit pixel inspection or Windows/macOS validation. All 77 Rust tests and warning-free Clippy checks pass. Phase 8 is complete; Phase 10 full-tree continuous-sync performance acceptance remains pending.
