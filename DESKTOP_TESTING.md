@@ -70,7 +70,8 @@ interrupted when its terminal session ended and is not counted as completed. A
 later supervised run verified seven content checkpoints and three clean restarts,
 but was stopped after a regression exposed scan feedback from read/access events
 and unrelated sibling changes. The watcher correction preserves real native
-modifications and rescan warnings; the corrected runtime needs fresh live evidence.
+modifications and rescan warnings. All six live automatic-sequence checks passed
+with the corrected runtime; its fresh three-hour native-owner run is active.
 
 `scripts/live_soak.py` supervises a fresh three-hour run after the automatic
 sequence passes, independently of terminal session lifetime. It alternates local
