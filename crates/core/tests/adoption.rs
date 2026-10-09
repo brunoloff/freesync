@@ -94,7 +94,10 @@ async fn resumes_remote_checkpoint_and_rechecks_changed_local_content() {
         m.run(&p, &CancellationToken::new()).await.unwrap_err().code,
         ErrorCode::Transient
     );
-    assert_eq!(m.report(None, "", 0, 10).unwrap().progress.remote_items, 1);
+    let interrupted = m.report(None, "", 0, 10).unwrap().progress;
+    assert_eq!(interrupted.remote_items, 1);
+    assert_eq!(interrupted.phase, "failed");
+    assert!(interrupted.current_path.is_none());
     m.run(&p, &CancellationToken::new()).await.unwrap();
     assert_eq!(m.report(None, "", 0, 10).unwrap().counts["matched"], 1);
     std::fs::write(s.local_root.join("one"), b"changed size").unwrap();

@@ -355,6 +355,9 @@ impl Manifest {
         // files.list can shift when entries are added or removed. A change feed
         // merge alone cannot prove an unchanged item was not skipped by a page.
         // Require a complete quiet listing pass before declaring the report ready.
+        p.phase = "drive_inventory".into();
+        p.current_path = None;
+        self.set("progress", p)?;
         for _ in 0..3 {
             if self.get::<String>("cursor")?.is_none() {
                 p.remote_items = 0;
@@ -365,7 +368,6 @@ impl Manifest {
                 p.drive_passes = 1;
             }
             if !self.get::<bool>("remote_done")?.unwrap_or(false) {
-                p.phase = "drive_inventory".into();
                 self.set("progress", p)?;
                 let mut page = self.get::<Option<String>>("page")?.flatten();
                 loop {
