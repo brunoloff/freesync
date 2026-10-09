@@ -36,6 +36,8 @@ transfers were also verified. The graphical local chooser is implemented; the
 typed-path selection route was exercised. OS interaction checks belong on the
 platform validation checklist before distribution.
 
+The lifecycle checks were repeated after the watcher correction: UI Quit exited the native process cleanly, and restart preserved the account, active pair, 30-second polling and 25-file deletion limit. Startup and notifications stayed off. The next remote content checkpoint converged while the actual settings window was hidden and the tray object remained present; Show settings restored native visibility.
+
 ## Design and rendered inspection
 
 The retained private primary and folder-dialog design references are
