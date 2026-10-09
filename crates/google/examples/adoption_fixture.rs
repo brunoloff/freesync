@@ -194,6 +194,11 @@ async fn run() -> Result<()> {
         command: EngineCommand::Adopt {
             scope: "scope".into(),
             revision: report.progress.revision,
+            gitignore_signature:
+                manifest.review_scope("scope", report.progress.revision)?["gitignore_signature"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
         },
         reply,
     })

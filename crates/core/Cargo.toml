@@ -8,7 +8,9 @@ rust-version.workspace = true
 async-trait.workspace = true
 directories.workspace = true
 fs2.workspace = true
+git2 = { version = "0.21", default-features = false }
 globset.workspace = true
+ignore = { version = "0.4.33", default-features = false }
 md-5.workspace = true
 notify.workspace = true
 rusqlite.workspace = true

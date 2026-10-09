@@ -70,12 +70,23 @@ pub fn plan(
             "The selected root or inventory is unhealthy. No work was planned.",
         ));
     }
-    let ignore = Exclusions::new(&pair.excludes)?;
+    let ignore = Exclusions::for_pair(pair)?;
     let mut result = Plan::default();
     let base: BTreeMap<_, _> = baselines.iter().map(|b| (b.path.clone(), b)).collect();
     let mut blocked: BTreeSet<String> = local.skipped.iter().map(|s| s.path.clone()).collect();
     result.skipped = local.skipped.clone();
     for (path, items) in &remote.entries {
+        if ignore.excludes_kind(
+            path,
+            items.first().map(|r| r.kind).unwrap_or(ItemKind::File),
+        )? {
+            blocked.insert(path.clone());
+            result.skipped.push(SkippedItem {
+                path: path.clone(),
+                reason: "Excluded by folder options or .gitignore".into(),
+            });
+            continue;
+        }
         crate::local::validate_relative(path)?;
         if items.len() != 1 {
             blocked.insert(path.clone());
@@ -100,7 +111,7 @@ pub fn plan(
     // A stable file identity / Drive ID, plus unchanged content and descendants,
     // distinguishes a move from unrelated delete/create operations. Ambiguity is a conflict.
     for b in baselines {
-        if ignore.excludes(&b.path)
+        if ignore.excludes_kind(&b.path, b.local.kind)?
             || blocked.iter().any(|p| beneath(&b.path, p))
             || consumed.contains(&b.path)
         {
@@ -215,7 +226,14 @@ pub fn plan(
                     )
                 })
                 .count();
-            if subtree_ok && source_count == local_count && source_count == remote_count {
+            if !ignore.excludes_kind(to, l.kind)?
+                && !blocked
+                    .iter()
+                    .any(|p| beneath(p, &b.path) || beneath(p, to))
+                && subtree_ok
+                && source_count == local_count
+                && source_count == remote_count
+            {
                 result
                     .operations
                     .push(operation(pair, to, action, Some(&l), Some(&r)));
@@ -260,7 +278,16 @@ pub fn plan(
     for path in paths {
         crate::local::validate_relative(&path)?;
         if consumed.contains(&path)
-            || ignore.excludes(&path)
+            || ignore.excludes_kind(
+                &path,
+                local
+                    .entries
+                    .get(&path)
+                    .map(|l| l.kind)
+                    .or_else(|| single(remote, &path).map(|r| r.kind))
+                    .or_else(|| base.get(&path).map(|b| b.local.kind))
+                    .unwrap_or(ItemKind::File),
+            )?
             || blocked.iter().any(|p| beneath(&path, p))
         {
             continue;
@@ -345,6 +372,7 @@ pub fn plan(
             op.path.clone(),
         )
     });
+    ignore.verify_unchanged()?;
     Ok(result)
 }
 

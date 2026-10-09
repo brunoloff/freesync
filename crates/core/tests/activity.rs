@@ -12,6 +12,7 @@ fn pair(root: &std::path::Path) -> PairConfig {
         remote_root_name: "test".into(),
         root_identity: "fixture".into(),
         excludes: vec![],
+        respect_gitignore: true,
         enabled: false,
         poll_secs: 1,
         deletion_limit: 10,

@@ -45,14 +45,21 @@ async fn prepare_inner(
     pair: &PairConfig,
     provider: &dyn Provider,
 ) -> Result<Plan> {
-    let local = local::scan(&pair.local_root, &pair.excludes)?;
+    let local = local::scan_pair(pair)?;
     if local.root_identity != pair.root_identity {
         return Err(Error::new(
             ErrorCode::IncompleteScan,
             "The local root has been replaced. Sync is stopped until the folder is reviewed.",
         ));
     }
-    let pending = db.operations(&pair.id)?;
+    let mut pending = Vec::new();
+    for op in db.operations(&pair.id)? {
+        if crate::executor::ignore_guard(pair, &op)? {
+            db.skip_operation(&op)?;
+        } else {
+            pending.push(op);
+        }
+    }
     if !pending.is_empty() {
         return Ok(Plan {
             operations: pending,

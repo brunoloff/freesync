@@ -25,6 +25,10 @@ freesync adoption-report --status unresolved --name 'search text'
 
 Ctrl+C cancels a CLI inventory. GUI cancellation controls its own background inventory; a CLI process must be stopped from its own terminal. Neither command starts transfers.
 
+Adoption defaults to respecting local `.gitignore` files. Git-ignored findings are excluded dynamically; they are not copied into permanent literal exclusions. Folder review displays the current included counts and binds activation to the ignore-file/index snapshot, so policy changes require another review. After activation, the folder option can be disabled through a paused preview.
+
+To reapply local rules to an already completed saved inventory without relisting Drive, run `freesync adoption-report --refresh-ignore-rules` while adoption is stopped. This rechecks local files and changes the review revision, but keeps the displayed Drive comparison time. A full comparison still rechecks current Drive metadata before activation.
+
 Report totals count files, folders and other findings. An excluded finding can represent a whole branch. The report is a saved comparison at the displayed completion time; refreshing it makes a new read-only comparison. Proposed uploads/downloads are review findings until a selected scope is activated.
 
 ## Review and gradual activation

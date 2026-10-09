@@ -37,6 +37,7 @@ fn setup() -> (
         remote_root_name: "test-freesync".into(),
         root_identity: local::scan(root.path(), &[]).unwrap().root_identity,
         excludes: vec![],
+        respect_gitignore: true,
         enabled: true,
         poll_secs: 1,
         deletion_limit: 10,

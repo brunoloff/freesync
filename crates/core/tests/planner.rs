@@ -14,6 +14,7 @@ fn pair(root: &std::path::Path) -> PairConfig {
         remote_root_name: "test-freesync".into(),
         root_identity: local::scan(root, &[]).unwrap().root_identity,
         excludes: vec![],
+        respect_gitignore: true,
         enabled: false,
         poll_secs: 1,
         deletion_limit: 10,

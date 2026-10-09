@@ -12,7 +12,7 @@ export function message(error: unknown): string {
   return error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : 'The settings connection is unavailable. Reopen FreeSync and try again.';
 }
 export interface Status { state: string; queued: number; conflicts: number; last_sync?: number; error?: AppError; current_path?: string; progress_bytes: number; total_bytes: number; retry_at?: number }
-export interface Pair { id: string; account: string; local_root: string; remote_id: string; remote_name: string; remote_path?: string; enabled: boolean; poll_secs: number; deletion_limit: number; status: Status; deletion_hold: boolean; deletion_count: number }
+export interface Pair { id: string; account: string; local_root: string; remote_id: string; remote_name: string; remote_path?: string; enabled: boolean; poll_secs: number; deletion_limit: number; respect_gitignore: boolean; status: Status; deletion_hold: boolean; deletion_count: number }
 export type ConflictChoice = 'keep_both' | 'use_local' | 'use_drive' | 'compare' | 'refresh';
 export interface Conflict { id: string; pair_id: string; path: string; reason: string; can_keep_both: boolean; can_use_local: boolean; can_use_drive: boolean; local_bytes?: number; remote_bytes?: number }
 export interface ConflictJob { id: string; conflict_id: string; pair_id: string; path: string; choice: ConflictChoice; state: string; error?: AppError }
@@ -24,4 +24,4 @@ export interface ActivityEntry { id: number; at_ms: number; action: string; outc
 export interface ActivityPage { entries: ActivityEntry[]; matching: number; total: number; latest_id: number; limit: number; log_error?: AppError }
 export interface AdoptionFinding { path: string; status: string; reason: string; size_bytes?: number; remote_id?: string; kind?: 'file' | 'folder' | 'native_document' | 'shortcut' }
 export interface AdoptionReport { source: { account_email: string; local_root: string; remote_root_id: string; root_identity: string; excludes: string[]; exclusion_source: string }; progress: { phase: string; revision: number; drive_passes?: number; remote_folders_checked?: number; remote_folders_total?: number; remote_items: number; local_items: number; hashed_bytes: number; reused_hashes: number; current_path?: string; completed_at?: number; error?: AppError }; counts: Record<string, number>; findings: AdoptionFinding[]; matching: number; offset: number; directory: string }
-export interface AdoptionScope { scope: string; revision: number; pair: { local_root: string; remote_root_id: string; remote_root_name: string; account_email: string; excludes: string[] }; counts: Record<string, number> }
+export interface AdoptionScope { gitignore_signature: string; scope: string; revision: number; pair: { local_root: string; remote_root_id: string; remote_root_name: string; account_email: string; excludes: string[] }; counts: Record<string, number> }

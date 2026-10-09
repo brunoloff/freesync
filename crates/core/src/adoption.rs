@@ -634,7 +634,7 @@ impl Manifest {
         cancel: &CancellationToken,
     ) -> Result<()> {
         self.verify_local_root(source)?;
-        let exclusions = local::Exclusions::new(&source.excludes)?;
+        let exclusions = local::Exclusions::for_root(&source.local_root, &source.excludes, true)?;
         let root_modified =
             local::modified(&fs::symlink_metadata(&source.local_root)?)?.to_string();
         let run = self.get::<u64>("local_run")?.unwrap_or(0) + 1;
@@ -703,6 +703,24 @@ impl Manifest {
                 if exclusions.excludes(&path) {
                     self.issue(&path, "Excluded by reviewed rules", "local")?;
                     continue;
+                }
+                if local::validate_relative(&path).is_ok() {
+                    let meta = fs::symlink_metadata(child.path())?;
+                    if exclusions.excludes_kind(
+                        &path,
+                        if meta.is_dir() {
+                            ItemKind::Folder
+                        } else {
+                            ItemKind::File
+                        },
+                    )? {
+                        self.issue(
+                            &path,
+                            "Excluded by .gitignore (dynamic folder policy)",
+                            "local",
+                        )?;
+                        continue;
+                    }
                 }
                 if local::validate_relative(&path).is_err() {
                     self.issue(
@@ -809,6 +827,7 @@ impl Manifest {
                 "The local root changed during inventory. Resume rechecks the tree and keeps verified hashes.",
             ));
         }
+        exclusions.verify_unchanged()?;
         self.set("local_root_modified", &root_modified)
     }
     fn verify_local_entries(&self, source: &Source, cancel: &CancellationToken) -> Result<()> {
@@ -847,6 +866,8 @@ impl Manifest {
         self.verify_local_root(source)
     }
     fn match_entries(&self, p: &mut Progress, cancel: &CancellationToken) -> Result<()> {
+        let source = self.source()?;
+        let ignore = local::Exclusions::for_root(&source.local_root, &source.excludes, true)?;
         p.phase = "matching".into();
         self.set("progress", p)?;
         let tx = self.db.unchecked_transaction()?;
@@ -906,7 +927,26 @@ impl Manifest {
                         | "desktop"
                 )
             });
-            let (status, reason) = if let Some(reason) = blocked_reason {
+            let kind = local
+                .as_ref()
+                .map(|l| l.kind)
+                .or_else(|| remote.first().map(|r| r.kind))
+                .unwrap_or(ItemKind::File);
+            let gitignored = blocked_reason.is_none()
+                && local::validate_relative(&path).is_ok()
+                && ignore.excludes_kind(&path, kind)?;
+            if gitignored && kind == ItemKind::Folder {
+                blocked.insert(
+                    path.clone(),
+                    "Excluded by .gitignore (dynamic folder policy)".into(),
+                );
+            }
+            let (status, reason) = if gitignored {
+                (
+                    "excluded",
+                    "Excluded by .gitignore (dynamic folder policy)".into(),
+                )
+            } else if let Some(reason) = blocked_reason {
                 (
                     if reason.starts_with("Excluded") {
                         "excluded"
@@ -976,8 +1016,38 @@ impl Manifest {
                 params![path, status, serde_json::to_string(&finding)?],
             )?;
         }
+        ignore.verify_unchanged()?;
         tx.commit()?;
         Ok(())
+    }
+    /// Reapply local policy to the saved Drive inventory. Never contacts Drive.
+    pub fn refresh_ignore_policy(&self) -> Result<()> {
+        let mut progress = self.get::<Progress>("progress")?.ok_or_else(|| {
+            Error::new(
+                ErrorCode::InvalidConfig,
+                "No completed adoption report is available.",
+            )
+        })?;
+        if progress.phase != "ready" {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "Finish or resume the adoption comparison before refreshing its policy.",
+            ));
+        }
+        let completed = progress.completed_at;
+        progress.revision += 1;
+        let cancel = CancellationToken::new();
+        let result = self
+            .local_scan(&self.source()?, &mut progress, &cancel)
+            .and_then(|_| self.match_entries(&mut progress, &cancel));
+        progress.phase = if result.is_ok() { "ready" } else { "failed" }.into();
+        progress.completed_at = completed;
+        progress.current_path = None;
+        progress.error = result.as_ref().err().cloned();
+        self.set("progress", &progress)?;
+        result?;
+        self.set("ignore_policy_refreshed_at", &crate::executor::now())?;
+        self.write_summary(&self.report(None, "", 0, 50)?)
     }
     pub async fn run(&self, provider: &dyn Provider, cancel: &CancellationToken) -> Result<()> {
         let source = self.source()?;
@@ -1199,14 +1269,16 @@ impl Manifest {
                 .collect();
             excludes.push(format!("**/*.{letters}"));
         }
-        let mut statement = self.db.prepare("SELECT path FROM issues ORDER BY path")?;
+        let mut statement = self.db.prepare(
+            "SELECT path FROM issues WHERE reason NOT LIKE 'Excluded by .gitignore%' ORDER BY path",
+        )?;
         for row in statement.query_map([], |r| r.get::<_, String>(0))? {
             if let Some(relative) = row?.strip_prefix(&format!("{path}/")) {
                 excludes.push(literal_glob(relative));
             }
         }
         let mut statement = self.db.prepare(
-            "SELECT path FROM findings WHERE status IN ('excluded','protected') ORDER BY path",
+            "SELECT path FROM findings WHERE status IN ('excluded','protected') AND json_extract(json,'$.reason') NOT LIKE 'Excluded by .gitignore%' ORDER BY path",
         )?;
         for row in statement.query_map([], |r| r.get::<_, String>(0))? {
             if let Some(relative) = row?.strip_prefix(&format!("{path}/")) {
@@ -1233,6 +1305,7 @@ impl Manifest {
                 )
             })?,
             excludes,
+            respect_gitignore: true,
             enabled: false,
             poll_secs: 60,
             deletion_limit: 25,
@@ -1242,18 +1315,37 @@ impl Manifest {
     pub fn review_scope(&self, path: &str, revision: u64) -> Result<serde_json::Value> {
         let pair = self.scope(path, revision)?;
         let prefix = format!("{path}/");
-        let mut counts = BTreeMap::new();
-        let mut statement = self.db.prepare(
-            "SELECT status,count(*) FROM findings WHERE substr(path,1,?1)=?2 GROUP BY status",
-        )?;
+        let ignore = local::Exclusions::for_pair(&pair)?;
+        let mut counts = BTreeMap::<String, u64>::new();
+        let mut statement = self
+            .db
+            .prepare("SELECT json FROM findings WHERE substr(path,1,?1)=?2 ORDER BY path")?;
         for row in statement.query_map(params![prefix.chars().count() as i64, prefix], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            r.get::<_, String>(0)
         })? {
-            let (k, v) = row?;
-            counts.insert(k, v);
+            let finding: Finding = serde_json::from_str(&row?)?;
+            let relative = finding.path.strip_prefix(&format!("{path}/")).unwrap();
+            let status = if local::validate_relative(relative).is_ok()
+                && ignore.excludes_kind(relative, finding.kind.unwrap_or(ItemKind::File))?
+            {
+                "excluded"
+            } else if finding.reason.starts_with("Excluded by .gitignore") {
+                // Expanding policy after a scan requires new comparison rather
+                // than silently authorizing previously unreviewed transfers.
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    "Git ignore rules changed. Refresh the adoption comparison before reviewing this folder.",
+                ));
+            } else {
+                finding.status.as_str()
+            };
+            *counts.entry(status.into()).or_default() += 1;
         }
-        Ok(serde_json::json!({"scope":path,"revision":revision,"pair":pair,"counts":counts}))
+        Ok(
+            serde_json::json!({"scope":path,"revision":revision,"pair":pair,"counts":counts,"gitignore_signature":ignore.signature()?}),
+        )
     }
+
     pub fn verify_scope(
         &self,
         scope: &str,
@@ -1261,7 +1353,7 @@ impl Manifest {
         local: &LocalInventory,
         remote: &RemoteInventory,
     ) -> Result<()> {
-        let exclusions = local::Exclusions::new(&pair.excludes)?;
+        let exclusions = local::Exclusions::for_pair(pair)?;
         let mut expected_local = BTreeMap::new();
         let mut expected_remote: BTreeMap<String, Vec<RemoteItem>> = BTreeMap::new();
         let prefix = format!("{scope}/");
@@ -1273,8 +1365,8 @@ impl Manifest {
         })? {
             let (path, json) = row?;
             let relative = path.strip_prefix(&prefix).unwrap();
-            if !exclusions.excludes(relative) {
-                let mut entry: LocalEntry = serde_json::from_str(&json)?;
+            let mut entry: LocalEntry = serde_json::from_str(&json)?;
+            if !exclusions.excludes_kind(relative, entry.kind)? {
                 entry.path = relative.into();
                 expected_local.insert(relative.to_owned(), entry);
             }
@@ -1285,11 +1377,12 @@ impl Manifest {
         })? {
             let (path, json) = row?;
             let relative = path.strip_prefix(&prefix).unwrap();
-            if !exclusions.excludes(relative) {
+            let item: RemoteItem = serde_json::from_str(&json)?;
+            if !exclusions.excludes_kind(relative, item.kind)? {
                 expected_remote
                     .entry(relative.into())
                     .or_default()
-                    .push(serde_json::from_str(&json)?);
+                    .push(item);
             }
         }
         let local_same = expected_local.len() == local.entries.len()
@@ -1298,8 +1391,18 @@ impl Manifest {
                 // retain equivalent bytes and commit the freshly observed stamp.
                 expected_local.get(path).is_some_and(|e| e.content_eq(l))
             });
-        let remote_same = expected_remote.len() == remote.entries.len()
-            && remote.entries.iter().all(|(path, items)| {
+        let mut included_remote = BTreeMap::new();
+        for (path, items) in &remote.entries {
+            if !exclusions.excludes_kind(
+                path,
+                items.first().map(|r| r.kind).unwrap_or(ItemKind::File),
+            )? {
+                included_remote.insert(path.clone(), items.clone());
+            }
+        }
+        exclusions.verify_unchanged()?;
+        let remote_same = expected_remote.len() == included_remote.len()
+            && included_remote.iter().all(|(path, items)| {
                 expected_remote.get(path).is_some_and(|expected| {
                     expected.len() == items.len()
                         && items.iter().all(|r| {

@@ -8,6 +8,7 @@ pub mod engine;
 pub mod error;
 pub mod executor;
 pub mod fake;
+pub mod gitignore;
 pub mod insync;
 pub mod local;
 pub mod model;

@@ -1,6 +1,6 @@
 # Implementation progress
 
-Phases 1–8 in `PLAN.md` are complete within the declared Linux preview scope. Phase 8 finished on 9 October 2026 with a real read-only adoption report, tested gradual activation and verified backups. Real-tree activation remains a separate user choice; Phase 9 and later phases are pending.
+Phases 1–8 in `PLAN.md` are complete within the declared Linux preview scope. Phase 8 finished on 9 October 2026 with a real read-only adoption report, tested gradual activation and verified backups. Real-tree activation remains a separate user choice; Phase 9 has started with default-on Git-ignore support; the remaining Phase 9 workflows and later phases are pending.
 
 ## Phase 1 — complete
 
@@ -126,3 +126,12 @@ Drive child listing checks up to four concurrent groups of 64 parents. Single-pa
 Metadata GETs retry transient failures up to five times with bounded exponential backoff and jitter. Short server retry delays are respected; long delays and permanent errors remain visible. Cancellation interrupts the wait without a detached retry. Write protocols retain their existing guards.
 
 Final validation: 77 Rust tests pass, including 19 adoption integration tests and eight grouped-inventory cases; formatting, Clippy with warnings denied, TypeScript and the frontend production build pass. The normal desktop and CLI binaries build successfully. These checks complete Phase 8; they do not establish Phase 10 full-tree continuous-sync performance acceptance. The real tree remains read-only until the user activates reviewed subfolders.
+
+
+## Phase 9 — Git-ignore policy implemented
+
+Folder options now expose Respect .gitignore, default-on for new and previously saved pairs. Native Rust matchers and a read-only Git index preserve tracked files without invoking Git per file. Both directions, cached baselines, queued transfers, conflict choices and adoption reviews honor the policy. Ignored files remain untouched on both sides, and directory deletion/move guards retain ignored descendants. Watchers retain rule-change coverage; inventories detect changed rule files/indexes and activation requires the reviewed policy signature.
+
+A private read-only audit catalogue records matched remote files and folders, rule provenance, sizes and versions. It separates unknown tracking status and global/info exclusions, reports missing local rule files and unreachable metadata, and performs no cleanup. Current cloud comparison provenance remains the completed Phase 8 metadata snapshot. Reports and real-tree paths/IDs are never published with the source.
+
+Validation for this slice: 84 Rust tests pass, including Git pattern/index coverage, queued-work cancellation, both-direction protection, ignored descendants and adoption review invalidation. Formatting, Clippy with warnings denied, TypeScript and production frontend/native builds pass. Disposable live Drive checks verified included uploads/downloads and left ignored content untouched; GUI checks saved the override into a paused four-operation preview and restoring the option cancelled all four. The completed real-tree report was reclassified from the saved metadata inventory without Drive writes. Windows/macOS runtime checks and Phase 10 continuous-sync performance remain pending.

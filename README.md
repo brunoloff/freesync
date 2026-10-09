@@ -60,6 +60,14 @@ cargo build -p freesync-desktop
 
 The binary embeds the built frontend and needs no development web server. Rebuild the frontend and binary after UI changes. Close the settings window to keep the engine running in the tray. Left-click the tray icon to raise a hidden or background window, or hide it when already focused; right-click for the menu, including Quit to save progress and stop. The CLI and desktop share an exclusive profile owner; stop one before starting the other. Startup at login is optional and disabled until selected.
 
+Install a per-user Linux application-menu launcher after building the desktop binary:
+
+```sh
+python3 scripts/install-linux-launcher.py
+```
+
+Search for **FreeSync** in KDE's application menu or KRunner. Launching it again opens the existing app's settings through its tray service. The installer copies the icon and refreshes KDE's application cache; it does not change startup-at-login settings. It uses the current checkout and debug binary, so reinstall after moving the checkout. Pass `--binary /absolute/path/to/freesync-desktop` to select another build. The launcher uses Python 3 and `busctl`; startup diagnostics are saved to `~/.local/state/freesync/launcher.log` (or `$XDG_STATE_HOME/freesync/launcher.log`).
+
 The folder dialog browses the connected Drive account, accepts a native folder selection or typed path, saves polling/deletion limits, and opens a paused preview before activation. New development pairs use the private authorized test mapping. Use **Adoption** for the existing-tree mapping established during setup: inventory read-only, inspect discrepancies, then review and activate selected subfolders. Equivalent files retain their Drive IDs; initial differences remain conflicts. Large-folder performance validation remains Phase 10.
 
 Conflict decisions run in the background with per-item progress. Keep both preserves the local file under a conflict name and syncs the Drive version under its original name. Use local retains the Drive original in recovery before uploading; Use Drive retains the local original before replacing it. Changed versions reject stale decisions. Refresh comparison updates the displayed versions without choosing one. Diff validates UTF-8 or UTF-16 text, makes private read-only copies of both versions, and launches an installed system viewer (KDiff3 is verified on Linux). KDiff3 copies are removed when its process closes while FreeSync is running. If FreeSync exits first, or a viewer can hand off to another process, copies remain in the private profile's `comparisons/` directory.
@@ -75,6 +83,10 @@ cd ..
 cargo build -p freesync-desktop --features browser-test
 FREESYNC_BROWSER_TEST=1 ./target/debug/freesync-desktop
 ```
+
+Folder options include **Respect .gitignore**, enabled by default. Ignored paths are left untouched locally and on Drive; tracked files remain included. Turn it off and review the preview to include generated files. See [POLICIES.md](POLICIES.md) for rule scope, queued-work protection and exceptions.
+
+`scripts/report-remote-gitignored.py --manifest /absolute/profile/adoption/manifest.sqlite3 --discovery /absolute/discovery.json --output /absolute/private/report` produces a private read-only remote-file catalogue from a completed adoption snapshot. The discovery JSON supplies `root`, `repositories`, `valid_repositories`, `invalid_repositories`, `gitignore_files`, and `errors`; it must come from a local non-symlink-following directory discovery. The script requires Git for this one-off audit; the application uses native libraries and does not require Git to be installed. `freesync adoption-report --refresh-ignore-rules` reapplies local policy to the saved Drive inventory; it rechecks local files, increments the review revision and preserves the original remote comparison time. It makes no Drive requests.
 
 The design references and extracted UI system are in [design/DESIGN.md](design/DESIGN.md). The Activity tab stores local history across restarts, with name/path, file-size, action, outcome and time filters, sorting and pagination. Expand an event for operation IDs, exact sizes, attempts, retries, error codes, scan duration or recovery locations. Open logs folder reveals the private profile: `activity.jsonl` mirrors this detailed history, while `events.jsonl` retains count-only engine summaries. JSON logs rotate after 2 MiB with one previous file; SQLite history is retained without automatic pruning. History begins when this version starts; earlier transfers are not reconstructed. File contents, OAuth credentials and resumable upload URLs are excluded.
 

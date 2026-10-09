@@ -133,6 +133,8 @@ pub struct PairConfig {
     pub remote_root_name: String,
     pub root_identity: String,
     pub excludes: Vec<String>,
+    #[serde(default = "default_respect_gitignore")]
+    pub respect_gitignore: bool,
     pub enabled: bool,
     pub poll_secs: u64,
     pub deletion_limit: usize,
@@ -263,4 +265,8 @@ pub struct Controls {
     pub paused: bool,
     pub sync_now: u64,
     pub quit: bool,
+}
+
+fn default_respect_gitignore() -> bool {
+    true
 }

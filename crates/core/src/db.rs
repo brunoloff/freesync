@@ -350,6 +350,26 @@ impl Database {
         self.connection.execute("INSERT INTO state VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET json=json_patch(state.json,excluded.json)", params![key,serde_json::to_string(value)?])?;
         Ok(())
     }
+    /// Retain baselines when an exclusion cancels queued work.
+    pub fn skip_operation(&self, operation: &Operation) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let mut finished = operation.clone();
+        finished.state = crate::OperationState::Done;
+        finished.upload_session = None;
+        tx.execute(
+            "UPDATE operations SET state='done',json=?2 WHERE id=?1",
+            params![finished.id, serde_json::to_string(&finished)?],
+        )?;
+        let mut entry = crate::activity::Entry::operation(&finished, "skipped");
+        entry.message = "Excluded by folder options or .gitignore; both copies retained".into();
+        crate::activity::insert(
+            &tx,
+            &entry,
+            Some(&format!("operation:{}:skipped", finished.id)),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
     pub fn save_operation(&self, operation: &Operation) -> Result<()> {
         let state = serde_json::to_value(operation.state)?
             .as_str()

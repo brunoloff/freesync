@@ -15,6 +15,7 @@ fn pair(root: &std::path::Path) -> PairConfig {
         remote_root_name: "test-freesync".into(),
         root_identity: local::scan(root, &[]).unwrap().root_identity,
         excludes: vec![],
+        respect_gitignore: true,
         enabled: false,
         poll_secs: 1,
         deletion_limit: 20,
@@ -324,4 +325,76 @@ async fn metadata_only_source_version_bumps_allow_verified_downloads_but_not_sta
     .unwrap();
     assert_eq!(cloud.download(&id, 0, 100).await.unwrap(), b"new remote");
     assert_eq!(db.conflicts(&pair.id).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn gitignore_protects_both_sides_baselines_and_already_queued_work() {
+    let root = tempfile::tempdir().unwrap();
+    let profile = tempfile::tempdir().unwrap();
+    let cloud = FakeProvider::default();
+    fs::write(root.path().join("baseline.bin"), b"same").unwrap();
+    let id = cloud.seed("root", "baseline.bin", b"same", ItemKind::File);
+    let mut pair = pair(root.path());
+    let mut db = Database::open(profile.path()).unwrap();
+    db.save_pair(&pair).unwrap();
+    cycle(&mut db, profile.path(), &pair, &cloud).await;
+    let original = db.baselines(&pair.id).unwrap();
+    fs::remove_file(root.path().join("baseline.bin")).unwrap();
+    fs::write(root.path().join("pending.bin"), b"do not upload").unwrap();
+    reconcile::prepare(&mut db, &pair, &cloud).await.unwrap();
+    assert_eq!(db.operations(&pair.id).unwrap().len(), 2);
+    fs::write(root.path().join(".gitignore"), "*.bin\n/build/\n").unwrap();
+    executor::execute(
+        &mut db,
+        profile.path(),
+        &pair,
+        &cloud,
+        &CancellationToken::new(),
+        256 * 1024,
+    )
+    .await
+    .unwrap();
+    assert!(db.operations(&pair.id).unwrap().is_empty());
+    assert!(!cloud.get(&id).await.unwrap().trashed);
+    assert_eq!(db.baselines(&pair.id).unwrap().len(), original.len());
+    let folder = cloud.seed("root", "build", b"", ItemKind::Folder);
+    cloud.seed(&folder, "cloud.txt", b"untouched", ItemKind::File);
+    cloud.seed("root", "download.bin", b"untouched", ItemKind::File);
+    cycle(&mut db, profile.path(), &pair, &cloud).await;
+    assert!(!root.path().join("download.bin").exists());
+    assert!(!root.path().join("build").exists());
+    assert!(db.conflicts(&pair.id).unwrap().is_empty());
+    pair.respect_gitignore = false;
+    db.save_pair(&pair).unwrap();
+    let preview = reconcile::prepare(&mut db, &pair, &cloud).await.unwrap();
+    assert!(preview.operations.iter().any(|o| o.path == "download.bin"));
+    assert!(preview.operations.iter().any(|o| o.path == "pending.bin"));
+    assert!(
+        preview
+            .operations
+            .iter()
+            .any(|o| o.path == "baseline.bin" && matches!(o.action, Action::TrashRemote))
+    );
+    // Deliberately leave the override as a preview: no deletion is executed.
+}
+
+#[tokio::test]
+async fn ignored_children_prevent_parent_deletion() {
+    let root = tempfile::tempdir().unwrap();
+    let profile = tempfile::tempdir().unwrap();
+    let cloud = FakeProvider::default();
+    fs::create_dir(root.path().join("parent")).unwrap();
+    fs::write(root.path().join("parent/cache.tmp"), b"cached").unwrap();
+    let folder = cloud.seed("root", "parent", b"", ItemKind::Folder);
+    let file = cloud.seed(&folder, "cache.tmp", b"cached", ItemKind::File);
+    let pair = pair(root.path());
+    let mut db = Database::open(profile.path()).unwrap();
+    db.save_pair(&pair).unwrap();
+    cycle(&mut db, profile.path(), &pair, &cloud).await;
+    fs::remove_dir_all(root.path().join("parent")).unwrap();
+    fs::write(root.path().join(".gitignore"), "*.tmp\n").unwrap();
+    cycle(&mut db, profile.path(), &pair, &cloud).await;
+    assert!(!cloud.get(&file).await.unwrap().trashed);
+    assert!(!cloud.get(&folder).await.unwrap().trashed);
+    assert!(!db.conflicts(&pair.id).unwrap().is_empty());
 }

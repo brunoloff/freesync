@@ -24,12 +24,28 @@ pub trait ProviderFactory: Send + Sync {
 /// Mutating settings requests execute between cycles on the sole profile owner.
 /// UI/control connections cannot race the planner, transfer journal or recovery.
 pub enum EngineCommand {
-    Adopt { scope: String, revision: u64 },
-    Preview { pair_id: String },
-    Activate { pair_id: String },
-    Configure { pair: PairConfig },
-    KeepBoth { pair_id: String, path: String },
-    ApproveDeletions { pair_id: String, count: usize },
+    Adopt {
+        scope: String,
+        revision: u64,
+        gitignore_signature: String,
+    },
+    Preview {
+        pair_id: String,
+    },
+    Activate {
+        pair_id: String,
+    },
+    Configure {
+        pair: PairConfig,
+    },
+    KeepBoth {
+        pair_id: String,
+        path: String,
+    },
+    ApproveDeletions {
+        pair_id: String,
+        count: usize,
+    },
 }
 pub struct EngineRequest {
     pub command: EngineCommand,
@@ -41,9 +57,21 @@ async fn handle_request(
     factory: &dyn ProviderFactory,
     command: EngineCommand,
 ) -> Result<serde_json::Value> {
-    if let EngineCommand::Adopt { scope, revision } = &command {
+    if let EngineCommand::Adopt {
+        scope,
+        revision,
+        gitignore_signature,
+    } = &command
+    {
         let _lock = profile::ProfileLock::acquire(&profile.join("adoption"))?;
         let manifest = crate::adoption::Manifest::open(&profile.join("adoption"))?;
+        let review = manifest.review_scope(scope, *revision)?;
+        if review["gitignore_signature"].as_str() != Some(gitignore_signature.as_str()) {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "Git ignore rules or tracked paths changed since review. Review the folder again before activating.",
+            ));
+        }
         let mut pair = manifest.scope(scope, *revision)?;
         local::check_nonoverlap(
             &pair.local_root,
@@ -78,7 +106,7 @@ async fn handle_request(
                 "The selected Drive folder changed. Refresh adoption.",
             ));
         }
-        let local = local::scan(&pair.local_root, &pair.excludes)?;
+        let local = local::scan_pair(&pair)?;
         let remote =
             crate::remote::snapshot(provider.as_ref(), &pair.remote_root_id, &pair.excludes, &[])
                 .await?;
@@ -87,6 +115,14 @@ async fn handle_request(
             .verify_remote_location(provider.as_ref(), scope)
             .await?;
         manifest.verify_scope(scope, &pair, &local, &remote)?;
+        if manifest.review_scope(scope, *revision)?["gitignore_signature"].as_str()
+            != Some(gitignore_signature.as_str())
+        {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "Git ignore policy changed during activation. Review the folder again.",
+            ));
+        }
         let plan = crate::planner::plan(&pair, &local, &remote, &[])?;
         let backup = profile
             .join("backups")
@@ -150,7 +186,7 @@ async fn handle_request(
             ));
         }
         factory.connect(&pair).await?;
-        let inventory = crate::local::scan(&pair.local_root, &pair.excludes)?;
+        let inventory = crate::local::scan_pair(&pair)?;
         if inventory.root_identity != pair.root_identity {
             return Err(Error::new(
                 ErrorCode::IncompleteScan,

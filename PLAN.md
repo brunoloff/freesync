@@ -177,7 +177,7 @@ Finish the controls and file policies expected in version 1.
 **Deliverables**
 
 - Support multiple accounts and folder pairs with isolated identities, databases or namespaces, credentials, change cursors, and error states. Prevent overlapping local roots.
-- Add folder-level selective sync and ignore rules with previews. Excluded content stays outside the reconciliation baseline; deselection keeps local files by default and never implies remote deletion.
+- Add folder-level selective sync and ignore rules with previews. New excluded content stays outside the reconciliation baseline; existing baselines are retained so changing an exclusion never implies deletion. Deselection keeps local files by default and never implies remote deletion. Default-on .gitignore support and its folder override are implemented; broader selective-sync controls remain pending.
 - Complete conflict resolution: keep both, use local, use remote, retry comparison, and defer. Destructive choices retain recovery copies and verify that the displayed versions are still current.
 - Define portable filename mapping for case collisions, duplicate Drive names, Unicode, invalid platform characters, and reserved names. Keep mappings reversible and stable across restarts.
 - Handle Google Docs, Sheets, and Slides as stable browser link files by default, with a clear policy for existing InSync link files. Identify shortcuts and unsupported items without accidentally following cycles or uploading link files as replacements for native documents. Native document export is a distinct operation from downloading ordinary file bytes. [Drive download and export guide](https://developers.google.com/workspace/drive/api/guides/manage-downloads)

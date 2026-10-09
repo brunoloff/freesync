@@ -156,6 +156,7 @@ async fn dispatch_inner(app: tauri::AppHandle, command: &str, args: Value) -> Re
             state
                 .request(EngineCommand::Adopt {
                     scope: text("scope")?,
+                    gitignore_signature: text("gitignoreSignature")?,
                     revision: args["revision"].as_u64().ok_or_else(|| {
                         Error::new(
                             ErrorCode::InvalidConfig,
@@ -228,6 +229,7 @@ async fn dispatch_inner(app: tauri::AppHandle, command: &str, args: Value) -> Re
                     &text("remoteId")?,
                     args["pollSecs"].as_u64().unwrap_or(10),
                     args["deletionLimit"].as_u64().unwrap_or(20) as usize,
+                    args["respectGitignore"].as_bool().unwrap_or(true),
                 )
                 .await
         }

@@ -694,3 +694,92 @@ async fn cancelling_during_local_hashing_preserves_verified_entries() {
     assert_eq!(report.counts["matched"], 320);
     assert_eq!(report.counts["upload"], 1);
 }
+
+#[tokio::test]
+async fn adoption_excludes_gitignored_files_without_freezing_rules_into_literal_exclusions() {
+    let (_tmp, source, manifest, cloud) = fixture();
+    std::fs::create_dir(source.local_root.join("scope")).unwrap();
+    std::fs::write(
+        source.local_root.join("scope/.gitignore"),
+        "/build/\n*.tmp\n",
+    )
+    .unwrap();
+    std::fs::write(source.local_root.join("scope/keep.txt"), b"same").unwrap();
+    std::fs::write(source.local_root.join("scope/local.tmp"), b"local").unwrap();
+    let scope = cloud.seed("root", "scope", b"", ItemKind::Folder);
+    cloud.seed(&scope, "keep.txt", b"same", ItemKind::File);
+    cloud.seed(&scope, "remote.tmp", b"remote", ItemKind::File);
+    let build = cloud.seed(&scope, "build", b"", ItemKind::Folder);
+    cloud.seed(&build, "generated.txt", b"build", ItemKind::File);
+    manifest
+        .run(&cloud, &CancellationToken::new())
+        .await
+        .unwrap();
+    let report = manifest.report(None, "", 0, 100).unwrap();
+    for path in [
+        "scope/local.tmp",
+        "scope/remote.tmp",
+        "scope/build",
+        "scope/build/generated.txt",
+    ] {
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.path == path && f.status == "excluded"),
+            "{path}"
+        );
+    }
+    let pair = manifest.scope("scope", report.progress.revision).unwrap();
+    assert!(pair.respect_gitignore);
+    assert!(
+        !pair
+            .excludes
+            .iter()
+            .any(|p| p == "build" || p == "local.tmp" || p == "remote.tmp")
+    );
+    let review = manifest
+        .review_scope("scope", report.progress.revision)
+        .unwrap();
+    let l = local::scan_pair(&pair).unwrap();
+    let r = remote::snapshot(&cloud, &scope, &pair.excludes, &[])
+        .await
+        .unwrap();
+    manifest.verify_scope("scope", &pair, &l, &r).unwrap();
+    std::fs::write(
+        source.local_root.join("scope/.gitignore"),
+        "/build/\n*.tmp\n*.txt\n",
+    )
+    .unwrap();
+    let tightened = manifest
+        .review_scope("scope", report.progress.revision)
+        .unwrap();
+    assert_ne!(
+        review["gitignore_signature"],
+        tightened["gitignore_signature"]
+    );
+    std::fs::write(source.local_root.join("scope/.gitignore"), "").unwrap();
+    assert!(
+        manifest
+            .review_scope("scope", report.progress.revision)
+            .is_err()
+    );
+    manifest.refresh_ignore_policy().unwrap();
+    let refreshed = manifest.report(None, "", 0, 100).unwrap();
+    assert!(refreshed.progress.revision > report.progress.revision);
+    assert_eq!(
+        refreshed.progress.completed_at,
+        report.progress.completed_at
+    );
+    assert!(
+        refreshed
+            .findings
+            .iter()
+            .any(|f| f.path == "scope/remote.tmp" && f.status == "download")
+    );
+    assert!(
+        manifest
+            .review_scope("scope", refreshed.progress.revision)
+            .is_ok()
+    );
+}

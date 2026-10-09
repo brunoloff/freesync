@@ -11,7 +11,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-pub struct Exclusions(GlobSet);
+pub struct Exclusions(GlobSet, Option<crate::gitignore::Rules>);
 impl Exclusions {
     pub fn new(patterns: &[String]) -> Result<Self> {
         let mut b = GlobSetBuilder::new();
@@ -20,12 +20,44 @@ impl Exclusions {
                 Error::new(ErrorCode::InvalidConfig, "An exclusion pattern is invalid.")
             })?);
         }
-        Ok(Self(b.build().map_err(|_| {
-            Error::new(
-                ErrorCode::InvalidConfig,
-                "Exclusion patterns could not be compiled.",
-            )
-        })?))
+        Ok(Self(
+            b.build().map_err(|_| {
+                Error::new(
+                    ErrorCode::InvalidConfig,
+                    "Exclusion patterns could not be compiled.",
+                )
+            })?,
+            None,
+        ))
+    }
+    pub fn for_pair(pair: &crate::PairConfig) -> Result<Self> {
+        Self::for_root(&pair.local_root, &pair.excludes, pair.respect_gitignore)
+    }
+    pub fn for_root(root: &Path, patterns: &[String], respect: bool) -> Result<Self> {
+        let mut exclusions = Self::new(patterns)?;
+        if respect {
+            exclusions.1 = Some(crate::gitignore::Rules::new(root)?);
+        }
+        Ok(exclusions)
+    }
+    pub fn excludes_kind(&self, path: &str, kind: ItemKind) -> Result<bool> {
+        Ok(self.excludes(path)
+            || match &self.1 {
+                Some(rules) => rules.ignored(path, kind)?,
+                None => false,
+            })
+    }
+    pub fn signature(&self) -> Result<String> {
+        match &self.1 {
+            Some(rules) => rules.signature(),
+            None => Ok("disabled".into()),
+        }
+    }
+    pub fn verify_unchanged(&self) -> Result<()> {
+        if let Some(rules) = &self.1 {
+            rules.verify_unchanged()?;
+        }
+        Ok(())
     }
     /// Excluding a directory also excludes its descendants, regardless of glob syntax.
     pub fn excludes(&self, path: &str) -> bool {
@@ -239,11 +271,17 @@ pub fn entry(root: &Path, relative: &str) -> Result<Option<LocalEntry>> {
 }
 
 pub fn scan(root: &Path, patterns: &[String]) -> Result<LocalInventory> {
+    scan_with_rules(root, patterns, false)
+}
+pub fn scan_pair(pair: &crate::PairConfig) -> Result<LocalInventory> {
+    scan_with_rules(&pair.local_root, &pair.excludes, pair.respect_gitignore)
+}
+fn scan_with_rules(root: &Path, patterns: &[String], respect: bool) -> Result<LocalInventory> {
     let root = canonical_root(root)?;
     let root_before = fs::metadata(&root)?;
     let root_identity =
         identity(&root_before).unwrap_or_else(|| root.to_string_lossy().into_owned());
-    let exclusions = Exclusions::new(patterns)?;
+    let exclusions = Exclusions::for_root(&root, patterns, respect)?;
     let mut inventory = LocalInventory {
         root_identity: root_identity.clone(),
         entries: BTreeMap::new(),
@@ -271,15 +309,22 @@ pub fn scan(root: &Path, patterns: &[String]) -> Result<LocalInventory> {
             } else {
                 format!("{dir}/{name}")
             };
-            if exclusions.excludes(&relative) {
+            let meta = fs::symlink_metadata(child.path())?;
+            if exclusions.excludes_kind(
+                &relative,
+                if meta.is_dir() {
+                    ItemKind::Folder
+                } else {
+                    ItemKind::File
+                },
+            )? {
                 inventory.skipped.push(SkippedItem {
                     path: relative,
-                    reason: "Excluded".into(),
+                    reason: "Excluded by folder options or .gitignore".into(),
                 });
                 continue;
             }
             validate_relative(&relative)?;
-            let meta = fs::symlink_metadata(child.path())?;
             if meta.file_type().is_symlink() || !meta.is_file() && !meta.is_dir() {
                 inventory.skipped.push(SkippedItem {
                     path: relative,
@@ -306,6 +351,7 @@ pub fn scan(root: &Path, patterns: &[String]) -> Result<LocalInventory> {
             ));
         }
     }
+    exclusions.verify_unchanged()?;
     if identity(&root_before) != identity(&fs::metadata(&root)?) {
         return Err(Error::new(
             ErrorCode::IncompleteScan,

@@ -289,7 +289,7 @@ impl AppState {
                 .iter()
                 .filter(|o| matches!(o.action, Action::TrashRemote | Action::RecycleLocal))
                 .count();
-            pair_views.push(json!({"id":pair.id,"account":pair.account_email,"local_root":pair.local_root,"remote_id":pair.remote_root_id,"remote_name":pair.remote_root_name,"remote_path":remote_path,"enabled":pair.enabled,"poll_secs":pair.poll_secs,"deletion_limit":pair.deletion_limit,"status":status,"deletion_hold":deletion_hold,"deletion_count":deletion_count}));
+            pair_views.push(json!({"id":pair.id,"account":pair.account_email,"local_root":pair.local_root,"remote_id":pair.remote_root_id,"remote_name":pair.remote_root_name,"remote_path":remote_path,"enabled":pair.enabled,"poll_secs":pair.poll_secs,"deletion_limit":pair.deletion_limit,"respect_gitignore":pair.respect_gitignore,"status":status,"deletion_hold":deletion_hold,"deletion_count":deletion_count}));
             for conflict in db.conflicts(&pair.id)? {
                 let ordinary = conflict
                     .local
@@ -371,6 +371,7 @@ impl AppState {
         remote_id: &str,
         poll_secs: u64,
         deletion_limit: usize,
+        respect_gitignore: bool,
     ) -> Result<Value> {
         let map: Value =
             serde_json::from_slice(&std::fs::read(config_directory().join("development.json"))?)?;
@@ -393,6 +394,7 @@ impl AppState {
             adoption::authorize(&self.database()?, &existing)?;
             existing.poll_secs = poll_secs;
             existing.deletion_limit = deletion_limit;
+            existing.respect_gitignore = respect_gitignore;
             return self
                 .request(EngineCommand::Configure { pair: existing })
                 .await;
@@ -407,6 +409,7 @@ impl AppState {
         pair.local_root = selected;
         pair.poll_secs = poll_secs;
         pair.deletion_limit = deletion_limit;
+        pair.respect_gitignore = respect_gitignore;
         self.request(EngineCommand::Configure { pair }).await
     }
     pub async fn browse(&self, parent: &str, page: Option<&str>) -> Result<Value> {

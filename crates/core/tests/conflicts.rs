@@ -40,6 +40,7 @@ async fn fixture(names: &[&str]) -> Fixture {
         remote_root_name: "test-freesync".into(),
         root_identity: local::scan(root.path(), &[]).unwrap().root_identity,
         excludes: vec![],
+        respect_gitignore: true,
         enabled: false,
         poll_secs: 1,
         deletion_limit: 20,

@@ -36,6 +36,9 @@ enum Command {
     },
     /// Read the saved adoption report (no scan or transfers).
     AdoptionReport {
+        /// Reapply current local .gitignore rules to the saved inventory; no Drive requests.
+        #[arg(long)]
+        refresh_ignore_rules: bool,
         #[arg(long)]
         status: Option<String>,
         #[arg(long, default_value = "")]
@@ -202,11 +205,20 @@ async fn execute(cli: Cli) -> Result<()> {
             result?;
         }
         Command::AdoptionReport {
+            refresh_ignore_rules,
             status,
             name,
             offset,
         } => {
             let manifest = freesync_core::adoption::Manifest::open(&profile.join("adoption"))?;
+            let _lock = if refresh_ignore_rules {
+                Some(ProfileLock::acquire(&profile.join("adoption"))?)
+            } else {
+                None
+            };
+            if refresh_ignore_rules {
+                manifest.refresh_ignore_policy()?;
+            }
             println!(
                 "{}",
                 serde_json::to_string_pretty(&manifest.report(
@@ -462,6 +474,7 @@ async fn execute(cli: Cli) -> Result<()> {
                 remote_root_name: remote.name.clone(),
                 root_identity: inventory.root_identity,
                 excludes: vec![],
+                respect_gitignore: true,
                 enabled: false,
                 poll_secs: 10,
                 deletion_limit: 20,

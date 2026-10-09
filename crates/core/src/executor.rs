@@ -318,6 +318,67 @@ fn finish_move(
     db.finish_many(op, &moved, Some(from))
 }
 
+pub(crate) fn ignore_guard(pair: &PairConfig, op: &Operation) -> Result<bool> {
+    let rules = local::Exclusions::for_pair(pair)?;
+    let kind = op
+        .expected_local
+        .as_ref()
+        .map(|l| l.kind)
+        .or_else(|| op.expected_remote.as_ref().map(|r| r.kind))
+        .unwrap_or(ItemKind::Folder);
+    if rules.excludes_kind(&op.path, kind)? {
+        return Ok(true);
+    }
+    if let Action::MoveLocal { from } | Action::MoveRemote { from } = &op.action
+        && rules.excludes_kind(from, kind)?
+    {
+        return Ok(true);
+    }
+    rules.verify_unchanged()?;
+    Ok(false)
+}
+fn allow_operation(pair: &PairConfig, op: &Operation) -> Result<()> {
+    if ignore_guard(pair, op)? {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "This path is now excluded by folder options or .gitignore. Both copies are retained.",
+        ));
+    }
+    Ok(())
+}
+async fn protect_move_children(
+    pair: &PairConfig,
+    provider: &dyn Provider,
+    op: &Operation,
+) -> Result<()> {
+    let (Action::MoveLocal { from } | Action::MoveRemote { from }) = &op.action else {
+        return Ok(());
+    };
+    if !op
+        .expected_remote
+        .as_ref()
+        .is_some_and(|r| r.kind == ItemKind::Folder)
+    {
+        return Ok(());
+    }
+    // Folder moves affect every descendant, including ignored or newly added
+    // children. Read fresh inventories, without applying exclusions.
+    let local = local::scan(&pair.local_root, &pair.excludes)?;
+    let remote = remote::snapshot(provider, &pair.remote_root_id, &pair.excludes, &[]).await?;
+    let rules = local::Exclusions::for_pair(pair)?;
+    for (path, kind) in local.entries.iter().map(|(p, l)| (p, l.kind)).chain(
+        remote
+            .entries
+            .iter()
+            .flat_map(|(p, rs)| rs.iter().map(move |r| (p, r.kind))),
+    ) {
+        if (beneath(path, from) || beneath(path, &op.path)) && rules.excludes_kind(path, kind)? {
+            return Err(changed());
+        }
+    }
+    rules.verify_unchanged()
+}
+
 async fn upload(
     db: &mut Database,
     profile: &Path,
@@ -328,6 +389,10 @@ async fn upload(
     chunk_size: usize,
 ) -> Result<RemoteItem> {
     let source = expected(&op.expected_local)?.clone();
+    let policy = local::Exclusions::for_pair(pair)?;
+    if policy.excludes_kind(&op.path, source.kind)? {
+        return Err(changed());
+    }
     let fingerprint = source.fingerprint.as_ref().ok_or_else(changed)?;
     let (parent, name) = parent(db, pair, provider, &op.path).await?;
     // A response may have been lost after final commit. Match the journaled ID
@@ -390,6 +455,7 @@ async fn upload(
         if let Some(remote) = &op.expected_remote {
             check_remote(pair, provider, remote).await?;
         }
+        policy.verify_unchanged()?;
         op.upload_session = Some(
             provider
                 .start_upload(&UploadRequest {
@@ -416,6 +482,7 @@ async fn upload(
         input.seek(SeekFrom::Start(session.uploaded_bytes))?;
         let mut bytes = vec![0; amount];
         input.read_exact(&mut bytes)?;
+        policy.verify_unchanged()?;
         match provider.upload_chunk(&session, bytes).await? {
             UploadProgress::Continue(n) => {
                 if n <= session.uploaded_bytes || n > fingerprint.size {
@@ -446,6 +513,8 @@ async fn perform(
 ) -> Result<()> {
     healthy(pair, provider).await?;
     checkpoint(db, cancel)?;
+    allow_operation(pair, op)?;
+    protect_move_children(pair, provider, op).await?;
     match &op.action.clone() {
         Action::Upload => {
             let item = upload(db, profile, pair, provider, op, cancel, chunk_size).await?;
@@ -471,6 +540,7 @@ async fn perform(
                 }
                 Ok(_) => return Err(changed()),
                 Err(e) if e.code == ErrorCode::NotFound => {
+                    allow_operation(pair, op)?;
                     provider.create_folder(&parent, &name, &op.id, id).await?
                 }
                 Err(e) => return Err(e),
@@ -480,6 +550,7 @@ async fn perform(
         Action::CreateLocalFolder => {
             let item = check_remote(pair, provider, expected(&op.expected_remote)?).await?;
             if local::entry(&pair.local_root, &op.path)?.is_none() {
+                allow_operation(pair, op)?;
                 fs::create_dir(local::safe_join(&pair.local_root, &op.path)?)?;
             }
             db.finish_operation(op, Some(&baseline(pair, &op.path, item)?), None)?;
@@ -533,10 +604,12 @@ async fn perform(
             checkpoint(db, cancel)?;
             let recovery = profile.join("recovery").join(&op.id).join("content");
             if op.expected_local.is_some() {
+                allow_operation(pair, op)?;
                 recycle(db, profile, pair, op, &op.path)?;
             } else if !recovery.exists() {
                 check_local(pair, &op.path, None)?;
             }
+            allow_operation(pair, op)?;
             install(&stage, &local::safe_join(&pair.local_root, &op.path)?)?;
             db.finish_operation(op, Some(&baseline(pair, &op.path, item)?), None)?;
         }
@@ -562,6 +635,7 @@ async fn perform(
                     check_local(pair, &path, Some(&b.local))?;
                     check_remote(pair, provider, &b.remote).await?;
                 }
+                allow_operation(pair, op)?;
                 provider.move_item(original, &parent, &name).await?
             };
             finish_move(db, pair, op, from, item)?;
@@ -588,6 +662,7 @@ async fn perform(
                 {
                     check_local(pair, &b.path, Some(&b.local))?;
                 }
+                allow_operation(pair, op)?;
                 // Destination is revalidated immediately; file moves use no-overwrite links.
                 let source = local::safe_join(&pair.local_root, from)?;
                 let destination = local::safe_join(&pair.local_root, &op.path)?;
@@ -615,6 +690,7 @@ async fn perform(
                 {
                     return Err(changed());
                 }
+                allow_operation(pair, op)?;
                 provider.trash(original).await?;
             }
             db.finish_operation(op, None, Some(&op.path))?;
@@ -627,6 +703,7 @@ async fn perform(
             {
                 return Err(changed());
             }
+            allow_operation(pair, op)?;
             recycle(db, profile, pair, op, &op.path)?;
             db.finish_operation(op, None, Some(&op.path))?;
         }
@@ -700,6 +777,12 @@ pub(crate) async fn keep_both_owned(
             "Keep both currently supports ordinary file content conflicts.",
         ));
     }
+    if local::Exclusions::for_pair(pair)?.excludes_kind(path, ItemKind::File)? {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "This conflict is now excluded by .gitignore. Both copies are retained.",
+        ));
+    }
     let key = format!("resolution:{}", conflict.id);
     let saved: Option<(String, LocalEntry)> = db.get(&key)?;
     let (preserved, source) = if let Some(saved) = saved {
@@ -744,6 +827,12 @@ pub(crate) async fn keep_both_owned(
         db.set(&key, &(preserved.clone(), source.clone()))?;
         (preserved, source)
     };
+    if local::Exclusions::for_pair(pair)?.excludes_kind(&preserved, ItemKind::File)? {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "The preserved conflict filename is excluded by .gitignore.",
+        ));
+    }
     if local::entry(&pair.local_root, path)?.is_some() {
         check_local(pair, path, Some(&source))?;
         move_no_replace(
@@ -829,7 +918,14 @@ pub async fn execute(
             "Choose a nonzero transfer chunk size.",
         ));
     }
-    let queue = db.operations(&pair.id)?;
+    let mut queue = Vec::new();
+    for op in db.operations(&pair.id)? {
+        if ignore_guard(pair, &op)? {
+            db.skip_operation(&op)?;
+        } else {
+            queue.push(op);
+        }
+    }
     let approved = db
         .get::<Vec<String>>(&format!("deletion_approved:{}", pair.id))?
         .unwrap_or_default();
@@ -853,6 +949,10 @@ pub async fn execute(
     for mut op in queue {
         checkpoint(db, cancel)?;
         if op.retry_at > now() {
+            continue;
+        }
+        if ignore_guard(pair, &op)? {
+            db.skip_operation(&op)?;
             continue;
         }
         healthy(pair, provider).await?;

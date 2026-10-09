@@ -248,7 +248,7 @@ async fn refresh(
     conflict: &Conflict,
 ) -> Result<()> {
     root_healthy(pair, provider).await?;
-    let local = local::scan(&pair.local_root, &pair.excludes)?;
+    let local = local::scan_pair(pair)?;
     let remote = remote::snapshot(
         provider,
         &pair.remote_root_id,
@@ -330,6 +330,14 @@ async fn prepare(
         ));
     }
     let (local, remote) = versions(pair, provider, &current).await?;
+    if task.choice != ConflictChoice::Compare
+        && local::Exclusions::for_pair(pair)?.excludes_kind(&current.path, local.kind)?
+    {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "This path is excluded by folder options or .gitignore. Both copies are retained.",
+        ));
+    }
     match task.choice {
         ConflictChoice::KeepBoth => {
             task.preserved_path =
