@@ -198,7 +198,7 @@ impl AppState {
         {
             return Err(Error::new(
                 ErrorCode::UnsafePath,
-                "This preview syncs only the mapped test-freesync folders. Existing existing sync tree adoption is a later phase.",
+                "This preview syncs only the mapped test-freesync folders. Adopting an existing tree is a later phase.",
             ));
         }
         pair.local_root = selected;
